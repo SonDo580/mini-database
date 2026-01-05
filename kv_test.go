@@ -1,6 +1,7 @@
 package db
 
 import (
+	"bytes"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -38,4 +39,15 @@ func TestKVBasic(t *testing.T) {
 
 	_, ok, err = kv.Get([]byte("k1"))
 	assert.True(t, !ok && err == nil)
+}
+
+func TestEntryEncodeDecode(t *testing.T) {
+	ent := Entry{key: []byte("k1"), val: []byte("zero")}
+	encoded := []byte{2, 0, 0, 0, 4, 0, 0, 0, 'k', '1', 'z', 'e', 'r', 'o'}
+	assert.Equal(t, ent.Encode(), encoded)
+
+	decoded := Entry{}
+	err := decoded.Decode(bytes.NewBuffer(encoded))
+	assert.Nil(t, err)
+	assert.Equal(t, ent, decoded)
 }
