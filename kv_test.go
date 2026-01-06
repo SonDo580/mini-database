@@ -43,11 +43,23 @@ func TestKVBasic(t *testing.T) {
 
 func TestEntryEncodeDecode(t *testing.T) {
 	ent := Entry{key: []byte("k1"), val: []byte("zero")}
-	encoded := []byte{2, 0, 0, 0, 4, 0, 0, 0, 'k', '1', 'z', 'e', 'r', 'o'}
+	encoded := []byte{2, 0, 0, 0, 4, 0, 0, 0, 0, 'k', '1', 'z', 'e', 'r', 'o'}
 	assert.Equal(t, ent.Encode(), encoded)
 
 	decoded := Entry{}
 	err := decoded.Decode(bytes.NewBuffer(encoded))
+	assert.Nil(t, err)
+	assert.Equal(t, ent, decoded)
+
+	ent = Entry{key: []byte("k1"), val: []byte("zero"), deleted: true}
+	encoded = []byte{2, 0, 0, 0, 0, 0, 0, 0, 1, 'k', '1'}
+	assert.Equal(t, ent.Encode(), encoded)
+
+	ent = Entry{key: []byte("k1"), deleted: true}
+	assert.Equal(t, ent.Encode(), encoded)
+
+	decoded = Entry{}
+	err = decoded.Decode(bytes.NewBuffer(encoded))
 	assert.Nil(t, err)
 	assert.Equal(t, ent, decoded)
 }
