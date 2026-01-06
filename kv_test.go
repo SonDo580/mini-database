@@ -2,6 +2,7 @@ package db
 
 import (
 	"bytes"
+	"os"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -9,6 +10,10 @@ import (
 
 func TestKVBasic(t *testing.T) {
 	kv := KV{}
+
+	kv.log.FileName = ".test_db"
+	defer os.Remove(kv.log.FileName)
+
 	err := kv.Open()
 	assert.Nil(t, err)
 	defer kv.Close()
@@ -39,6 +44,23 @@ func TestKVBasic(t *testing.T) {
 
 	_, ok, err = kv.Get([]byte("k1"))
 	assert.True(t, !ok && err == nil)
+
+	updated, err = kv.Set([]byte("k2"), []byte("v2"))
+	assert.True(t, updated && err == nil)
+
+	val, ok, err = kv.Get([]byte("k2"))
+	assert.True(t, string(val) == "v2" && ok && err == nil)
+
+	// Close and re-open
+	kv.Close()
+	err = kv.Open()
+	assert.Nil(t, err)
+
+	_, ok, err = kv.Get([]byte("k1"))
+	assert.True(t, !ok && err == nil)
+
+	val, ok, err = kv.Get([]byte("k2"))
+	assert.True(t, string(val) == "v2" && ok && err == nil)
 }
 
 func TestEntryEncodeDecode(t *testing.T) {
