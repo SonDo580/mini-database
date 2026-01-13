@@ -1,0 +1,112 @@
+package db
+
+import (
+	"errors"
+	"slices"
+)
+
+type Column struct {
+	Name string
+	Type CellType
+}
+
+type Schema struct {
+	Table string // table name
+	Cols  []Column
+	PKey  []int // indices of primary key columns
+}
+
+type Row []Cell
+
+func (schema *Schema) NewRow() Row {
+	return make(Row, len(schema.Cols))
+}
+
+/* Row as KV:
+- primary key as K.
+- other columns as V.
+*/
+
+func (row Row) EncodeKey(schema *Schema) (key []byte) {
+	check(len(row) == len(schema.Cols))
+
+	// - Avoid key conflicts from different tables
+	//   -> use table name
+	// - Avoid key conflicts from name prefixes
+	//   (example: table='abc', key='d' AND table='ab', key='cd')
+	//   -> add a separator
+	key = append([]byte(schema.Table), 0x00)
+
+	for i, cell := range row {
+		if slices.Contains(schema.PKey, i) {
+			check(cell.Type == schema.Cols[i].Type)
+			key = cell.Encode(key)
+		}
+	}
+
+	return key
+}
+
+func (row Row) EncodeVal(schema *Schema) (val []byte) {
+	check(len(row) == len(schema.Cols))
+
+	for i, cell := range row {
+		if !slices.Contains(schema.PKey, i) {
+			check(cell.Type == schema.Cols[i].Type)
+			val = cell.Encode(val)
+		}
+	}
+
+	return val
+}
+
+var ErrBadKey = errors.New("bad key")
+var ErrTrailingGarbage = errors.New("trailing garbage")
+
+func (row Row) DecodeKey(schema *Schema, key []byte) (err error) {
+	check(len(row) == len(schema.Cols))
+
+	if len(key) < len(schema.Table)+1 {
+		return ErrBadKey
+	}
+	if string(key[:len(schema.Table)+1]) != schema.Table+"\x00" {
+		return ErrBadKey
+	}
+	key = key[len(schema.Table)+1:] // skip table name and separator
+
+	for i := range row {
+		if !slices.Contains(schema.PKey, i) {
+			continue
+		}
+
+		row[i].Type = schema.Cols[i].Type
+		if key, err = row[i].Decode(key); err != nil {
+			return err
+		}
+	}
+
+	if len(key) != 0 {
+		return ErrTrailingGarbage
+	}
+	return nil
+}
+
+func (row Row) DecodeVal(schema *Schema, val []byte) (err error) {
+	check(len(row) == len(schema.Cols))
+
+	for i := range row {
+		if slices.Contains(schema.PKey, i) {
+			continue
+		}
+
+		row[i].Type = schema.Cols[i].Type
+		if val, err = row[i].Decode(val); err != nil {
+			return err
+		}
+	}
+
+	if len(val) != 0 {
+		return ErrTrailingGarbage
+	}
+	return nil
+}
