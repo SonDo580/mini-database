@@ -2,6 +2,7 @@ package db
 
 import (
 	"errors"
+	"fmt"
 	"strconv"
 	"strings"
 )
@@ -13,6 +14,17 @@ type Parser struct {
 
 func NewParser(s string) Parser {
 	return Parser{buf: s, pos: 0}
+}
+
+type NamedCell struct {
+	column string
+	value  Cell
+}
+
+type StmtSelect struct {
+	table string
+	cols  []string
+	keys  []NamedCell
 }
 
 func isSpace(ch byte) bool {
@@ -81,7 +93,6 @@ func (p *Parser) tryName() (string, bool) {
 
 func (p *Parser) tryKeyword(kw string) bool {
 	p.skipSpaces()
-
 	if p.pos+len(kw) > len(p.buf) || !strings.EqualFold(kw, p.buf[p.pos:p.pos+len(kw)]) {
 		return false
 	}
@@ -91,6 +102,30 @@ func (p *Parser) tryKeyword(kw string) bool {
 
 	p.pos += len(kw)
 	return true
+}
+
+func (p *Parser) matchKeyword(kw string) error {
+	if !p.tryKeyword(kw) {
+		return errors.New(fmt.Sprintf("expect keyword %q", strings.ToUpper(kw)))
+	}
+	return nil
+}
+
+func (p *Parser) tryPunctuation(tok string) bool {
+	p.skipSpaces()
+	if p.pos+len(tok) > len(p.buf) || p.buf[p.pos:p.pos+len(tok)] != tok {
+		return false
+	}
+
+	p.pos += len(tok)
+	return true
+}
+
+func (p *Parser) matchPunctuation(tok string) error {
+	if !p.tryPunctuation(tok) {
+		return errors.New(fmt.Sprintf("expect '%s'", tok))
+	}
+	return nil
 }
 
 func (p *Parser) parseValue(out *Cell) error {
@@ -153,4 +188,70 @@ func (p *Parser) parseInt(out *Cell) error {
 	out.Type = TypeI64
 	out.I64 = val
 	return nil
+}
+
+func (p *Parser) parseSelect(out *StmtSelect) error {
+	if err := p.matchKeyword("SELECT"); err != nil {
+		return err
+	}
+
+	for !p.tryKeyword("FROM") {
+		if len(out.cols) > 0 {
+			if err := p.matchPunctuation(","); err != nil {
+				return err
+			}
+		}
+
+		if name, ok := p.tryName(); ok {
+			out.cols = append(out.cols, name)
+		} else {
+			return errors.New("expect column")
+		}
+	}
+
+	if len(out.cols) == 0 {
+		return errors.New("expect column list")
+	}
+
+	var ok bool
+	if out.table, ok = p.tryName(); !ok {
+		return errors.New("expect table name")
+	}
+
+	return p.parseWhere(&out.keys)
+}
+
+func (p *Parser) parseWhere(out *[]NamedCell) error {
+	if err := p.matchKeyword("WHERE"); err != nil {
+		return err
+	}
+
+	for !p.tryPunctuation(";") {
+		var cell NamedCell
+		if len(*out) > 0 {
+			if err := p.matchKeyword("AND"); err != nil {
+				return err
+			}
+		}
+
+		if err := p.parseEqual(&cell); err != nil {
+			return err
+		}
+
+		*out = append(*out, cell)
+	}
+
+	return nil
+}
+
+func (p *Parser) parseEqual(out *NamedCell) error {
+	var ok bool
+	out.column, ok = p.tryName()
+	if !ok {
+		return errors.New("expect column")
+	}
+	if err := p.matchPunctuation("="); err != nil {
+		return err
+	}
+	return p.parseValue(&out.value)
 }

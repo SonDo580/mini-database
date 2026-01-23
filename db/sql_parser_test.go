@@ -41,3 +41,33 @@ func TestParseValue(t *testing.T) {
 	testParseValue(t, ` 'abc\'\"d' `, Cell{Type: TypeStr, Str: []byte("abc'\"d")})
 	testParseValue(t, ` "abc\'\"d" `, Cell{Type: TypeStr, Str: []byte("abc'\"d")})
 }
+
+func testParseSelect(t *testing.T, s string, ref StmtSelect) {
+	p := NewParser(s)
+	out := StmtSelect{}
+	err := p.parseSelect(&out)
+	assert.Nil(t, err)
+	assert.True(t, p.isEnd())
+	assert.Equal(t, ref, out)
+}
+
+func TestParseStmt(t *testing.T) {
+	s := "select a from t where c=1;"
+	stmt := StmtSelect{
+		table: "t",
+		cols:  []string{"a"},
+		keys:  []NamedCell{{column: "c", value: Cell{Type: TypeI64, I64: 1}}},
+	}
+	testParseSelect(t, s, stmt)
+
+	s = "select a, b_02 from t where c=1 and d='e';"
+	stmt = StmtSelect{
+		table: "t",
+		cols:  []string{"a", "b_02"},
+		keys: []NamedCell{
+			{column: "c", value: Cell{Type: TypeI64, I64: 1}},
+			{column: "d", value: Cell{Type: TypeStr, Str: []byte("e")}},
+		},
+	}
+	testParseSelect(t, s, stmt)
+}
