@@ -1,6 +1,10 @@
 package db
 
-import "strings"
+import (
+	"errors"
+	"strconv"
+	"strings"
+)
 
 type Parser struct {
 	buf string
@@ -87,4 +91,66 @@ func (p *Parser) tryKeyword(kw string) bool {
 
 	p.pos += len(kw)
 	return true
+}
+
+func (p *Parser) parseValue(out *Cell) error {
+	p.skipSpaces()
+	if p.pos == len(p.buf) {
+		return errors.New("expect value")
+	}
+
+	ch := p.buf[p.pos]
+	if ch == '"' || ch == '\'' {
+		return p.parseString(out)
+	}
+	if isDigit(ch) || ch == '-' || ch == '+' {
+		return p.parseInt(out)
+	}
+	return errors.New("expect value")
+}
+
+func (p *Parser) parseString(out *Cell) error {
+	start, curr := p.pos, p.pos
+	quote := p.buf[start]
+	curr++ // skip opening quote
+
+	str_bytes := []byte{}
+	for curr < len(p.buf) && p.buf[curr] != quote {
+		if p.buf[curr] == '\\' {
+			// escaped characters: \\, \', \" -> skip the leading \
+			str_bytes = append(str_bytes, p.buf[curr+1])
+			curr += 2
+		} else {
+			str_bytes = append(str_bytes, p.buf[curr])
+			curr++
+		}
+	}
+
+	if curr >= len(p.buf) {
+		return errors.New("expect string")
+	}
+
+	p.pos = curr + 1 // skip closing quote
+	out.Type = TypeStr
+	out.Str = str_bytes
+	return nil
+}
+
+func (p *Parser) parseInt(out *Cell) error {
+	start, curr := p.pos, p.pos
+	curr++ // match the first digit or '-' or '+'
+
+	for curr < len(p.buf) && isDigit(p.buf[curr]) {
+		curr++
+	}
+
+	val, err := strconv.ParseInt(p.buf[start:curr], 10, 64)
+	if err != nil {
+		return err
+	}
+
+	p.pos = curr
+	out.Type = TypeI64
+	out.I64 = val
+	return nil
 }
