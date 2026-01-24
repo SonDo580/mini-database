@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestTableByPKey(t *testing.T) {
@@ -61,4 +62,152 @@ func TestTableByPKey(t *testing.T) {
 
 	ok, err = db.Select(schema, out)
 	assert.True(t, !ok && err == nil)
+}
+
+func parseStmt(t *testing.T, s string) any {
+	p := NewParser(s)
+	stmt, err := p.parseStmt()
+	require.Nil(t, err)
+	return stmt
+}
+
+func TestSQLByPKey(t *testing.T) {
+	db := DB{}
+	db.KV.log.FileName = ".test_db"
+	defer os.Remove(db.KV.log.FileName)
+
+	os.Remove(db.KV.log.FileName)
+	err := db.Open()
+	assert.Nil(t, err)
+	defer db.Close()
+
+	s := "create table links (time int64, src string, dst string, primary key(src, dst));"
+	_, err = db.ExecStmt(parseStmt(t, s))
+	require.Nil(t, err)
+
+	// create table: duplicate table name
+	s = "create table links (any int64, primary key(any));"
+	_, err = db.ExecStmt(parseStmt(t, s))
+	require.NotNil(t, err)
+
+	// create table: primary key not in columns
+	s = "create table links_1 (time int64, src string, dst string, primary key(extra));"
+	_, err = db.ExecStmt(parseStmt(t, s))
+	require.NotNil(t, err)
+
+	// insert: schema mismatch
+	s = "insert into links values('123', 'bob', 'alice');"
+	r, err := db.ExecStmt(parseStmt(t, s))
+	require.NotNil(t, err)
+
+	// insert: schema mismatch (not enough values)
+	s = "insert into links values(123, 'bob');"
+	r, err = db.ExecStmt(parseStmt(t, s))
+	require.NotNil(t, err)
+
+	// insert: table not found
+	s = "insert into xxx values(123, 'bob', 'alice');"
+	r, err = db.ExecStmt(parseStmt(t, s))
+	require.NotNil(t, err)
+
+	s = "insert into links values(123, 'bob', 'alice');"
+	r, err = db.ExecStmt(parseStmt(t, s))
+	require.Nil(t, err)
+	require.Equal(t, r.Updated, 1)
+
+	// select: table not found
+	s = "select time from xxx where dst = 'alice' and src = 'bob';"
+	r, err = db.ExecStmt(parseStmt(t, s))
+	require.NotNil(t, err)
+
+	// select: condition is not primary key
+	s = "select time from links where dst = 'alice';"
+	r, err = db.ExecStmt(parseStmt(t, s))
+	require.NotNil(t, err)
+
+	// select: selected columns not found
+	s = "select any from links where dst = 'alice';"
+	r, err = db.ExecStmt(parseStmt(t, s))
+	require.NotNil(t, err)
+
+	// select: record not found
+	s = "select time from links where dst = 'alice' and src = 'not bob';"
+	r, err = db.ExecStmt(parseStmt(t, s))
+	require.Nil(t, err)
+	require.Equal(t, len(r.Values), 0)
+
+	s = "select time from links where dst = 'alice' and src = 'bob';"
+	r, err = db.ExecStmt(parseStmt(t, s))
+	require.Nil(t, err)
+	require.Equal(t, r.Values, []Row{{Cell{Type: TypeI64, I64: 123}}})
+
+	// update: table not found
+	s = "update xxx set time = 456 where dst = 'alice' and src = 'bob';"
+	r, err = db.ExecStmt(parseStmt(t, s))
+	require.NotNil(t, err)
+
+	// update: condition is not primary key
+	s = "update links set time = 456 where dst = 'alice';"
+	r, err = db.ExecStmt(parseStmt(t, s))
+	require.NotNil(t, err)
+
+	// update: cannot update primary key
+	s = "update links set dst = 'not alice' where dst = 'alice' and src = 'bob';"
+	r, err = db.ExecStmt(parseStmt(t, s))
+	require.NotNil(t, err)
+
+	// update: column to update not found
+	s = "update links set any = 'any' where dst = 'alice' and src = 'bob';"
+	r, err = db.ExecStmt(parseStmt(t, s))
+	require.NotNil(t, err)
+
+	// update: no affected records (key not found)
+	s = "update links set time = 456 where dst = 'alice' and src = 'not bob';"
+	r, err = db.ExecStmt(parseStmt(t, s))
+	require.Nil(t, err)
+	require.Equal(t, r.Updated, 0)
+
+	s = "update links set time = 456 where dst = 'alice' and src = 'bob';"
+	r, err = db.ExecStmt(parseStmt(t, s))
+	require.Nil(t, err)
+	require.Equal(t, r.Updated, 1)
+
+	s = "select time from links where dst = 'alice' and src = 'bob';"
+	r, err = db.ExecStmt(parseStmt(t, s))
+	require.Nil(t, err)
+	require.Equal(t, r.Values, []Row{{Cell{Type: TypeI64, I64: 456}}})
+
+	// REOPEN
+	err = db.Close()
+	require.Nil(t, err)
+	db = DB{}
+	db.KV.log.FileName = ".test_db"
+	err = db.Open()
+	require.Nil(t, err)
+
+	// delete: table not found
+	s = "delete from xxx where dst = 'alice' and src = 'bob';"
+	r, err = db.ExecStmt(parseStmt(t, s))
+	require.NotNil(t, err)
+
+	// delete: condition is not primary key
+	s = "delete from links where dst = 'alice';"
+	r, err = db.ExecStmt(parseStmt(t, s))
+	require.NotNil(t, err)
+
+	// delete: no affected records (key not found)
+	s = "delete from links where dst = 'alice' and src = 'not bob';"
+	r, err = db.ExecStmt(parseStmt(t, s))
+	require.Nil(t, err)
+	require.Equal(t, r.Updated, 0)
+
+	s = "delete from links where dst = 'alice' and src = 'bob';"
+	r, err = db.ExecStmt(parseStmt(t, s))
+	require.Nil(t, err)
+	require.Equal(t, r.Updated, 1)
+
+	s = "select time from links where dst = 'alice' and src = 'bob';"
+	r, err = db.ExecStmt(parseStmt(t, s))
+	require.Nil(t, err)
+	require.Equal(t, len(r.Values), 0)
 }

@@ -107,6 +107,19 @@ func TestParseStmt(t *testing.T) {
 	}
 	testParseStmt(t, s, stmt)
 
+	s = "update t set a = 1, b = 'hi' where c = 3 ;"
+	stmt = &StmtUpdate{
+		table: "t",
+		value: []NamedCell{
+			{column: "a", value: Cell{Type: TypeI64, I64: 1}},
+			{column: "b", value: Cell{Type: TypeStr, Str: []byte("hi")}},
+		},
+		keys: []NamedCell{
+			{column: "c", value: Cell{Type: TypeI64, I64: 3}},
+		},
+	}
+	testParseStmt(t, s, stmt)
+
 	s = "delete from t where c = 3 and d = 4;"
 	stmt = &StmtDelete{
 		table: "t",
