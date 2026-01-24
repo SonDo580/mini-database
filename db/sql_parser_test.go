@@ -42,26 +42,27 @@ func TestParseValue(t *testing.T) {
 	testParseValue(t, ` "abc\'\"d" `, Cell{Type: TypeStr, Str: []byte("abc'\"d")})
 }
 
-func testParseSelect(t *testing.T, s string, ref StmtSelect) {
+func testParseStmt(t *testing.T, s string, ref any) {
 	p := NewParser(s)
-	out := StmtSelect{}
-	err := p.parseSelect(&out)
+	out, err := p.parseStmt()
 	assert.Nil(t, err)
 	assert.True(t, p.isEnd())
 	assert.Equal(t, ref, out)
 }
 
 func TestParseStmt(t *testing.T) {
+	var stmt any
+
 	s := "select a from t where c=1;"
-	stmt := StmtSelect{
+	stmt = &StmtSelect{
 		table: "t",
 		cols:  []string{"a"},
 		keys:  []NamedCell{{column: "c", value: Cell{Type: TypeI64, I64: 1}}},
 	}
-	testParseSelect(t, s, stmt)
+	testParseStmt(t, s, stmt)
 
 	s = "select a, b_02 from t where c=1 and d='e';"
-	stmt = StmtSelect{
+	stmt = &StmtSelect{
 		table: "t",
 		cols:  []string{"a", "b_02"},
 		keys: []NamedCell{
@@ -69,5 +70,50 @@ func TestParseStmt(t *testing.T) {
 			{column: "d", value: Cell{Type: TypeStr, Str: []byte("e")}},
 		},
 	}
-	testParseSelect(t, s, stmt)
+	testParseStmt(t, s, stmt)
+
+	s = "create table t (a string, b int64, primary key (b));"
+	stmt = &StmtCreateTable{
+		table: "t",
+		cols: []Column{
+			{Name: "a", Type: TypeStr},
+			{Name: "b", Type: TypeI64},
+		},
+		pkey: []string{"b"},
+	}
+	testParseStmt(t, s, stmt)
+
+	s = "insert into t values (1, 'hi');"
+	stmt = &StmtInsert{
+		table: "t",
+		value: []Cell{
+			{Type: TypeI64, I64: 1},
+			{Type: TypeStr, Str: []byte("hi")},
+		},
+	}
+	testParseStmt(t, s, stmt)
+
+	s = "update t set a = 1, b = 'hi' where c = 3 and d = 'x';"
+	stmt = &StmtUpdate{
+		table: "t",
+		value: []NamedCell{
+			{column: "a", value: Cell{Type: TypeI64, I64: 1}},
+			{column: "b", value: Cell{Type: TypeStr, Str: []byte("hi")}},
+		},
+		keys: []NamedCell{
+			{column: "c", value: Cell{Type: TypeI64, I64: 3}},
+			{column: "d", value: Cell{Type: TypeStr, Str: []byte("x")}},
+		},
+	}
+	testParseStmt(t, s, stmt)
+
+	s = "delete from t where c = 3 and d = 4;"
+	stmt = &StmtDelete{
+		table: "t",
+		keys: []NamedCell{
+			{column: "c", value: Cell{Type: TypeI64, I64: 3}},
+			{column: "d", value: Cell{Type: TypeI64, I64: 4}},
+		},
+	}
+	testParseStmt(t, s, stmt)
 }
