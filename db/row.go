@@ -56,17 +56,19 @@ func (row Row) EncodeVal(schema *Schema) (val []byte) {
 	return val
 }
 
-var ErrBadKey = errors.New("bad key")
+// The key being decoded does not belong to current table
+var ErrOutOfRange = errors.New("out of range")
+
 var ErrTrailingGarbage = errors.New("trailing garbage")
 
 func (row Row) DecodeKey(schema *Schema, key []byte) (err error) {
 	check(len(row) == len(schema.Cols))
 
 	if len(key) < len(schema.Table)+1 {
-		return ErrBadKey
+		return ErrOutOfRange
 	}
 	if string(key[:len(schema.Table)+1]) != schema.Table+"\x00" {
-		return ErrBadKey
+		return ErrOutOfRange
 	}
 	key = key[len(schema.Table)+1:] // skip table name and separator
 

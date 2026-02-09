@@ -53,6 +53,76 @@ func (db *DB) Delete(schema *Schema, row Row) (deleted bool, err error) {
 	return db.KV.Del(key)
 }
 
+type RowIterator struct {
+	schema *Schema
+	kvIter *KVIterator
+	valid  bool // False if the key being decoded does not belong to current table
+	row    Row  // current row (decoded)
+}
+
+/* Convert current KV pair into a row. */
+func decodeKVIter(schema *Schema, kvIter *KVIterator, row Row) (valid bool, err error) {
+	if !kvIter.Valid() {
+		return false, nil
+	}
+
+	err = row.DecodeKey(schema, kvIter.Key())
+	if err == ErrOutOfRange {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+
+	if err = row.DecodeVal(schema, kvIter.Val()); err != nil {
+		return false, err
+	}
+
+	return true, nil
+}
+
+/* True if still in table key range. */
+func (rowIter *RowIterator) Valid() bool {
+	return rowIter.valid
+}
+
+/* Current row */
+func (rowIter *RowIterator) Row() Row {
+	check(rowIter.valid)
+	return rowIter.row
+}
+
+/* Move to the next row. */
+func (rowIter *RowIterator) Next() (err error) {
+	if err = rowIter.kvIter.Next(); err != nil {
+		return err
+	}
+	rowIter.valid, err = decodeKVIter(rowIter.schema, rowIter.kvIter, rowIter.row)
+	return err
+}
+
+/* Create a row iterator at the first position >= primary key. */
+func (db *DB) Seek(schema *Schema, row Row) (*RowIterator, error) {
+	key := row.EncodeKey(schema)
+	kvIter, err := db.KV.Seek(key)
+	if err != nil {
+		return nil, err
+	}
+
+	valid, err := decodeKVIter(schema, kvIter, row)
+	if err != nil {
+		return nil, err
+	}
+
+	rowIter := &RowIterator{
+		schema: schema,
+		kvIter: kvIter,
+		valid:  valid,
+		row:    row,
+	}
+	return rowIter, nil
+}
+
 type SQLResult struct {
 	// SELECT returns Header and Values
 	Headers []string
