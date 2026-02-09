@@ -89,7 +89,7 @@ func (kv *KV) SetEx(key []byte, val []byte, mode UpdateMode) (updated bool, err 
 			kv.vals[idx] = val
 		} else {
 			kv.keys = slices.Insert(kv.keys, idx, key)
-			kv.vals = slices.Insert(kv.keys, idx, val)
+			kv.vals = slices.Insert(kv.vals, idx, val)
 		}
 		updated = true
 	}
@@ -112,4 +112,47 @@ func (kv *KV) Del(key []byte) (deleted bool, err error) {
 		deleted = true
 	}
 	return
+}
+
+type KVIterator struct {
+	keys [][]byte // reference kv.keys
+	vals [][]byte // reference kv.vals
+	pos  int      // current position
+}
+
+/* Point to the first key >= key */
+func (kv *KV) Seek(key []byte) (*KVIterator, error) {
+	pos, _ := slices.BinarySearchFunc(kv.keys, key, bytes.Compare)
+	return &KVIterator{keys: kv.keys, vals: kv.vals, pos: pos}, nil
+}
+
+/* True if still in key range */
+func (iter *KVIterator) Valid() bool {
+	return 0 <= iter.pos && iter.pos < len(iter.keys)
+}
+
+/* Key of current element */
+func (iter *KVIterator) Key() []byte {
+	return iter.keys[iter.pos]
+}
+
+/* Value of current element */
+func (iter *KVIterator) Val() []byte {
+	return iter.vals[iter.pos]
+}
+
+/* Move to the next element */
+func (iter *KVIterator) Next() error {
+	if iter.pos < len(iter.keys) {
+		iter.pos++
+	}
+	return nil
+}
+
+/* Move to the previous element */
+func (iter *KVIterator) Prev() error {
+	if iter.pos >= 0 {
+		iter.pos--
+	}
+	return nil
 }

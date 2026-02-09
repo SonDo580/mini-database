@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestKVBasic(t *testing.T) {
@@ -169,4 +170,57 @@ func TestEntryEncodeDecode(t *testing.T) {
 	err = decoded.Decode(bytes.NewBuffer(encoded))
 	assert.Nil(t, err)
 	assert.Equal(t, ent, decoded)
+}
+
+func TestKVSeek(t *testing.T) {
+	kv := KV{}
+	kv.log.FileName = ".test_db"
+	defer os.Remove(kv.log.FileName)
+
+	os.Remove(kv.log.FileName)
+	err := kv.Open()
+	assert.Nil(t, err)
+	defer kv.Close()
+
+	keys := []string{"c", "e", "g"}
+	vals := []string{"3", "5", "7"}
+	for i := range keys {
+		_, _ = kv.Set([]byte(keys[i]), []byte(vals[i]))
+	}
+
+	iter, err := kv.Seek([]byte("a"))
+	require.Nil(t, err)
+	for i := range keys {
+		assert.True(t, iter.Valid())
+		assert.Equal(t, []byte(keys[i]), iter.Key())
+		assert.Equal(t, []byte(vals[i]), iter.Val())
+		err = iter.Next()
+		require.Nil(t, err)
+	}
+	assert.False(t, iter.Valid())
+
+	err = iter.Prev()
+	require.Nil(t, err)
+	for i := len(keys) - 1; i >= 0; i-- {
+		assert.True(t, iter.Valid())
+		assert.Equal(t, []byte(keys[i]), iter.Key())
+		assert.Equal(t, []byte(vals[i]), iter.Val())
+		err = iter.Prev()
+		require.Nil(t, err)
+	}
+	assert.False(t, iter.Valid())
+
+	iter, err = kv.Seek([]byte("f"))
+	require.Nil(t, err)
+	assert.True(t, iter.Valid())
+	assert.Equal(t, []byte("g"), iter.Key())
+
+	iter, err = kv.Seek([]byte("g"))
+	require.Nil(t, err)
+	assert.True(t, iter.Valid())
+	assert.Equal(t, []byte("g"), iter.Key())
+
+	iter, err = kv.Seek([]byte("h"))
+	require.Nil(t, err)
+	assert.False(t, iter.Valid())
 }
