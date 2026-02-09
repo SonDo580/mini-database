@@ -1,10 +1,16 @@
 package db
 
-import "bytes"
+import (
+	"bytes"
+	"slices"
+)
 
+// Use arrays to support sorting and range queries
+// TODO: Use LSM tree
 type KV struct {
-	log Log
-	mem map[string][]byte
+	log  Log
+	keys [][]byte
+	vals [][]byte
 }
 
 func (kv *KV) Open() error {
@@ -12,7 +18,8 @@ func (kv *KV) Open() error {
 		return err
 	}
 
-	kv.mem = map[string][]byte{}
+	kv.keys = [][]byte{}
+	kv.vals = [][]byte{}
 	for {
 		ent := Entry{}
 		eof, err := kv.log.Read(&ent)
@@ -23,10 +30,17 @@ func (kv *KV) Open() error {
 			break
 		}
 
+		key := ent.key
+		val := ent.val
+		idx, exists := slices.BinarySearchFunc(kv.keys, key, bytes.Compare)
 		if ent.deleted {
-			delete(kv.mem, string(ent.key))
+			kv.keys = slices.Delete(kv.keys, idx, idx+1)
+			kv.vals = slices.Delete(kv.vals, idx, idx+1)
+		} else if exists {
+			kv.vals[idx] = val
 		} else {
-			kv.mem[string(ent.key)] = ent.val
+			kv.keys = slices.Insert(kv.keys, idx, key)
+			kv.vals = slices.Insert(kv.vals, idx, val)
 		}
 	}
 
@@ -38,8 +52,10 @@ func (kv *KV) Close() error {
 }
 
 func (kv *KV) Get(key []byte) (val []byte, ok bool, err error) {
-	val, ok = kv.mem[string(key)]
-	return
+	if idx, ok := slices.BinarySearchFunc(kv.keys, key, bytes.Compare); ok {
+		return kv.vals[idx], true, nil
+	}
+	return nil, false, nil
 }
 
 type UpdateMode int
@@ -51,27 +67,32 @@ const (
 )
 
 func (kv *KV) SetEx(key []byte, val []byte, mode UpdateMode) (updated bool, err error) {
-	curr_val, exists := kv.mem[string(key)]
-
+	idx, exists := slices.BinarySearchFunc(kv.keys, key, bytes.Compare)
 	var needUpdate bool
-	if mode == ModeInsert {
+	switch mode {
+	case ModeUpsert:
+		needUpdate = !exists || !bytes.Equal(kv.vals[idx], val)
+	case ModeInsert:
 		needUpdate = !exists
-	} else if mode == ModeUpdate {
-		needUpdate = exists && !bytes.Equal(curr_val, val)
-	} else {
-		needUpdate = !exists || !bytes.Equal(curr_val, val)
+	case ModeUpdate:
+		needUpdate = exists && !bytes.Equal(kv.vals[idx], val)
+	default:
+		panic("unreachable")
 	}
 
 	if needUpdate {
-		err = kv.log.Write(&Entry{key: key, val: val})
-		if err != nil {
-			return
+		if err = kv.log.Write(&Entry{key: key, val: val}); err != nil {
+			return false, err
 		}
 
-		kv.mem[string(key)] = val
+		if exists {
+			kv.vals[idx] = val
+		} else {
+			kv.keys = slices.Insert(kv.keys, idx, key)
+			kv.vals = slices.Insert(kv.keys, idx, val)
+		}
 		updated = true
 	}
-
 	return
 }
 
@@ -80,15 +101,14 @@ func (kv *KV) Set(key []byte, val []byte) (updated bool, err error) {
 }
 
 func (kv *KV) Del(key []byte) (deleted bool, err error) {
-	_, exists := kv.mem[string(key)]
+	idx, exists := slices.BinarySearchFunc(kv.keys, key, bytes.Compare)
 	if exists {
-		err = kv.log.Write(&Entry{key: key, deleted: true})
-		if err != nil {
-			deleted = false
-			return
+		if err = kv.log.Write(&Entry{key: key, deleted: true}); err != nil {
+			return false, nil
 		}
 
-		delete(kv.mem, string(key))
+		kv.keys = slices.Delete(kv.keys, idx, idx+1)
+		kv.vals = slices.Delete(kv.vals, idx, idx+1)
 		deleted = true
 	}
 	return
