@@ -127,32 +127,100 @@ func (kv *KV) Seek(key []byte) (*KVIterator, error) {
 }
 
 /* True if still in key range */
-func (iter *KVIterator) Valid() bool {
-	return 0 <= iter.pos && iter.pos < len(iter.keys)
+func (kvIter *KVIterator) Valid() bool {
+	return 0 <= kvIter.pos && kvIter.pos < len(kvIter.keys)
 }
 
-/* Key of current element */
-func (iter *KVIterator) Key() []byte {
-	return iter.keys[iter.pos]
+/* Key of current entry */
+func (kvIter *KVIterator) Key() []byte {
+	return kvIter.keys[kvIter.pos]
 }
 
-/* Value of current element */
-func (iter *KVIterator) Val() []byte {
-	return iter.vals[iter.pos]
+/* Value of current entry */
+func (kvIter *KVIterator) Val() []byte {
+	return kvIter.vals[kvIter.pos]
 }
 
-/* Move to the next element */
-func (iter *KVIterator) Next() error {
-	if iter.pos < len(iter.keys) {
-		iter.pos++
+/* Move to the next entry */
+func (kvIter *KVIterator) Next() error {
+	if kvIter.pos < len(kvIter.keys) {
+		kvIter.pos++
 	}
 	return nil
 }
 
-/* Move to the previous element */
-func (iter *KVIterator) Prev() error {
-	if iter.pos >= 0 {
-		iter.pos--
+/* Move to the previous entry */
+func (kvIter *KVIterator) Prev() error {
+	if kvIter.pos >= 0 {
+		kvIter.pos--
 	}
 	return nil
+}
+
+type RangedKVIter struct {
+	kvIter KVIterator
+	stop   []byte // Stop key
+	desc   bool   // True if iterate in descending order
+}
+
+/* True if still in key range and haven't gone pass stop key. */
+func (rangedKVIter *RangedKVIter) Valid() bool {
+	if !rangedKVIter.kvIter.Valid() {
+		return false
+	}
+
+	r := bytes.Compare(rangedKVIter.kvIter.Key(), rangedKVIter.stop)
+	if rangedKVIter.desc && r < 0 {
+		return false
+	} else if !rangedKVIter.desc && r > 0 {
+		return false
+	}
+	return true
+}
+
+/* Key of current entry */
+func (rangedKVIter *RangedKVIter) Key() []byte {
+	check(rangedKVIter.Valid())
+	return rangedKVIter.kvIter.Key()
+}
+
+/* Value of current entry */
+func (rangedKVIter *RangedKVIter) Val() []byte {
+	check(rangedKVIter.Valid())
+	return rangedKVIter.kvIter.Val()
+}
+
+/* Move to the next entry */
+func (rangedKVIter *RangedKVIter) Next() error {
+	if !rangedKVIter.Valid() {
+		return nil
+	}
+	if rangedKVIter.desc {
+		return rangedKVIter.kvIter.Prev()
+	} else {
+		return rangedKVIter.kvIter.Next()
+	}
+}
+
+/* Create a ranged KV iterator from start to stop or stop to start .*/
+func (kv *KV) Range(start, stop []byte, desc bool) (*RangedKVIter, error) {
+	kvIter, err := kv.Seek(start)
+	if err != nil {
+		return nil, err
+	}
+
+	// kvIter points at the first key >= start, or after the last key
+	// for descending range we need that last key <= start
+	if desc && (!kvIter.Valid() || bytes.Compare(kvIter.Key(), start) > 0) {
+		if err = kvIter.Prev(); err != nil {
+			return nil, err
+		}
+	}
+
+	rangedKVIter := &RangedKVIter{
+		kvIter: *kvIter,
+		stop:   stop,
+		desc:   desc,
+	}
+	return rangedKVIter, nil
 }
