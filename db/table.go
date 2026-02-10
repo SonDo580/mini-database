@@ -54,30 +54,24 @@ func (db *DB) Delete(schema *Schema, row Row) (deleted bool, err error) {
 }
 
 type RowIterator struct {
-	schema *Schema
-	kvIter *KVIterator
-	valid  bool // False if the key being decoded does not belong to current table
-	row    Row  // current row (decoded)
+	schema       *Schema
+	rangedKVIter *RangedKVIter
+	valid        bool // False if the key being decoded does not belong to current table
+	row          Row  // current row (decoded)
 }
 
 /* Convert current KV pair into a row. */
-func decodeKVIter(schema *Schema, kvIter *KVIterator, row Row) (valid bool, err error) {
-	if !kvIter.Valid() {
+func decodeKVIter(schema *Schema, rangedKVIter *RangedKVIter, row Row) (valid bool, err error) {
+	if !rangedKVIter.Valid() {
 		return false, nil
 	}
-
-	err = row.DecodeKey(schema, kvIter.Key())
-	if err == ErrOutOfRange {
-		return false, nil
-	}
-	if err != nil {
+	if err = row.DecodeKey(schema, rangedKVIter.Key()); err != nil {
+		check(err != ErrOutOfRange)
 		return false, err
 	}
-
-	if err = row.DecodeVal(schema, kvIter.Val()); err != nil {
+	if err = row.DecodeVal(schema, rangedKVIter.Val()); err != nil {
 		return false, err
 	}
-
 	return true, nil
 }
 
@@ -94,33 +88,70 @@ func (rowIter *RowIterator) Row() Row {
 
 /* Move to the next row. */
 func (rowIter *RowIterator) Next() (err error) {
-	if err = rowIter.kvIter.Next(); err != nil {
+	if err = rowIter.rangedKVIter.Next(); err != nil {
 		return err
 	}
-	rowIter.valid, err = decodeKVIter(rowIter.schema, rowIter.kvIter, rowIter.row)
+	rowIter.valid, err = decodeKVIter(rowIter.schema, rowIter.rangedKVIter, rowIter.row)
 	return err
 }
 
-/* Create a row iterator at the first position >= primary key. */
+/* Create a row iterator for the range [start, +inf). */
 func (db *DB) Seek(schema *Schema, row Row) (*RowIterator, error) {
-	key := row.EncodeKey(schema)
-	kvIter, err := db.KV.Seek(key)
+	start := make([]Cell, len(schema.PKey))
+	for i, idx := range schema.PKey {
+		check(row[idx].Type == schema.Cols[idx].Type)
+		start[i] = row[idx]
+	}
+
+	return db.Range(schema, &RangeReq{
+		StartCmp: OP_GE,
+		StopCmp:  OP_LE,
+		Start:    start,
+		Stop:     nil,
+	})
+}
+
+type RangeReq struct {
+	StartCmp ExprOp
+	StopCmp  ExprOp
+	Start    []Cell
+	Stop     []Cell
+}
+
+/* Create a row iterator for the specified range. */
+func (db *DB) Range(schema *Schema, req *RangeReq) (*RowIterator, error) {
+	check(isDescending(req.StartCmp) != isDescending(req.StopCmp))
+
+	start := EncodeKeyPrefix(schema, req.Start, suffixPositive(req.StartCmp))
+	stop := EncodeKeyPrefix(schema, req.Stop, suffixPositive(req.StopCmp))
+	desc := isDescending(req.StartCmp)
+	rangedKVIter, err := db.KV.Range(start, stop, desc)
 	if err != nil {
 		return nil, err
 	}
 
-	valid, err := decodeKVIter(schema, kvIter, row)
+	row := schema.NewRow()
+	valid, err := decodeKVIter(schema, rangedKVIter, row)
 	if err != nil {
 		return nil, err
 	}
 
-	rowIter := &RowIterator{
-		schema: schema,
-		kvIter: kvIter,
-		valid:  valid,
-		row:    row,
-	}
-	return rowIter, nil
+	return &RowIterator{
+		schema:       schema,
+		rangedKVIter: rangedKVIter,
+		valid:        valid,
+		row:          row,
+	}, nil
+}
+
+/* If True, add +inf as suffix. Otherwise add -inf. */
+func suffixPositive(cmp ExprOp) bool {
+	return cmp == OP_LE || cmp == OP_GT
+}
+
+/* Determine scan direction. */
+func isDescending(startCmp ExprOp) bool {
+	return startCmp == OP_LE || startCmp == OP_LT
 }
 
 type SQLResult struct {

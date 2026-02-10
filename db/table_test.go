@@ -2,6 +2,7 @@ package db
 
 import (
 	"os"
+	"slices"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -232,7 +233,9 @@ func TestIterByPKey(t *testing.T) {
 	}
 
 	N := int64(10)
+	sorted := []int64{} // store inserted values in ascending order
 	for i := int64(0); i < N; i += 2 {
+		sorted = append(sorted, i)
 		row := Row{
 			Cell{Type: TypeI64, I64: i}, // k
 			Cell{Type: TypeI64, I64: i}, // v
@@ -241,7 +244,7 @@ func TestIterByPKey(t *testing.T) {
 		require.True(t, updated && err == nil)
 	}
 
-	for i := int64(-1); i <= N; i++ {
+	for i := int64(-1); i < N+1; i++ {
 		row := Row{
 			Cell{Type: TypeI64, I64: i}, // k
 			Cell{},
@@ -261,5 +264,92 @@ func TestIterByPKey(t *testing.T) {
 			}
 		}
 		assert.Equal(t, expected, out)
+	}
+
+	/* Iterate through all rows in a range and collect values. */
+	drainIter := func(req *RangeReq) (out []int64) {
+		rowIter, err := db.Range(schema, req)
+		for ; err == nil && rowIter.Valid(); err = rowIter.Next() {
+			out = append(out, rowIter.Row()[1].I64) // append v
+		}
+		require.Nil(t, err)
+		return
+	}
+
+	/* Collect values in a range from the given sorted slice. */
+	rangeQuery := func(sorted []int64, start, stop int64, desc bool) (out []int64) {
+		for _, v := range sorted {
+			if (!desc && start <= v && v <= stop) ||
+				(desc && stop <= v && v <= start) {
+				out = append(out, v)
+			}
+		}
+		if desc {
+			slices.Reverse(out)
+		}
+		return out
+	}
+
+	/* Validate implementation. */
+	testReq := func(req *RangeReq, i, j int64, desc bool) {
+		out := drainIter(req)
+		expected := rangeQuery(sorted, i, j, desc)
+		require.Equal(t, expected, out)
+	}
+
+	// Closed range
+	for i := int64(-1); i < N+1; i++ {
+		for j := int64(-1); j < N+1; j++ {
+			req := &RangeReq{
+				StartCmp: OP_GE,
+				StopCmp:  OP_LE,
+				Start:    []Cell{{Type: TypeI64, I64: i}},
+				Stop:     []Cell{{Type: TypeI64, I64: j}},
+			}
+			testReq(req, i, j, false)
+
+			req = &RangeReq{
+				StartCmp: OP_LE,
+				StopCmp:  OP_GE,
+				Start:    []Cell{{Type: TypeI64, I64: i}},
+				Stop:     []Cell{{Type: TypeI64, I64: j}},
+			}
+			testReq(req, i, j, true)
+
+			req = &RangeReq{
+				StartCmp: OP_GT,
+				StopCmp:  OP_LT,
+				Start:    []Cell{{Type: TypeI64, I64: i}},
+				Stop:     []Cell{{Type: TypeI64, I64: j}},
+			}
+			testReq(req, i+1, j-1, false)
+
+			req = &RangeReq{
+				StartCmp: OP_LT,
+				StopCmp:  OP_GT,
+				Start:    []Cell{{Type: TypeI64, I64: i}},
+				Stop:     []Cell{{Type: TypeI64, I64: j}},
+			}
+			testReq(req, i-1, j+1, true)
+		}
+	}
+
+	// Open-ended range
+	for i := int64(-1); i < N+1; i++ {
+		req := &RangeReq{
+			StartCmp: OP_GE,
+			StopCmp:  OP_LE,
+			Start:    []Cell{{Type: TypeI64, I64: i}},
+			Stop:     nil,
+		}
+		testReq(req, i, N, false)
+
+		req = &RangeReq{
+			StartCmp: OP_LE,
+			StopCmp:  OP_GE,
+			Start:    []Cell{{Type: TypeI64, I64: i}},
+			Stop:     nil,
+		}
+		testReq(req, i, -1, true)
 	}
 }

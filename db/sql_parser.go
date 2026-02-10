@@ -448,3 +448,13 @@ func (p *Parser) parseDelete(out *StmtDelete) error {
 	}
 	return p.parseWhere(&out.keys)
 }
+
+type ExprOp uint8
+
+// TODO: why pick these values?
+const (
+	OP_LE ExprOp = 12 // <=
+	OP_GE ExprOp = 13 // >=
+	OP_LT ExprOp = 14 // <
+	OP_GT ExprOp = 15 // >
+)
