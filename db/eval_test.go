@@ -9,7 +9,7 @@ import (
 
 func testEval(t *testing.T, schema *Schema, row Row, s string, expected Cell) {
 	p := NewParser(s)
-	expr, err := p.parseAdd()
+	expr, err := p.parseExpr()
 	require.Nil(t, err)
 	require.True(t, p.isEnd())
 
@@ -51,4 +51,5 @@ func TestEval(t *testing.T) {
 	testEval(t, schema, row, "a + b", makeCell("AB"))
 	testEval(t, schema, row, "c - d", makeCell(-1))
 	testEval(t, schema, row, "c * d - d * c + d", makeCell(4))
+	testEval(t, schema, row, "d or c and not d = c", makeCell(1))
 }

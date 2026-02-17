@@ -451,103 +451,42 @@ func (p *Parser) parseDelete(out *StmtDelete) error {
 
 type ExprOp uint8
 
+/*
+Operator precedence (lowest to highest):
+. OR
+. AND
+. NOT
+. comparison
+. addition & subtraction
+. multiplication & division
+. negation
+*/
 const (
 	OP_ADD ExprOp = 1  // +
 	OP_SUB ExprOp = 2  // -
 	OP_MUL ExprOp = 3  // *
 	OP_DIV ExprOp = 3  // /
+	OP_EQ  ExprOp = 10 // ==
+	OP_NE  ExprOp = 11 // !=
 	OP_LE  ExprOp = 12 // <=
 	OP_GE  ExprOp = 13 // >=
 	OP_LT  ExprOp = 14 // <
 	OP_GT  ExprOp = 15 // >
+	OP_AND ExprOp = 20 // AND
+	OP_OR  ExprOp = 21 // OR
+	OP_NOT ExprOp = 30 // NOT
+	OP_NEG ExprOp = 31 // -
 )
 
-/*
-Possible values for left and right:
-- string: represents column name.
-- &Cell{}: represents constant value.
-- &ExprBinOp{}: represents nested expression.
-*/
 type ExprBinOp struct {
 	op    ExprOp
 	left  interface{}
 	right interface{}
 }
 
-func (p *Parser) parseExpr() (interface{}, error) {
-	return p.parseAdd()
-}
-
-/* Parse addition and subtraction. */
-func (p *Parser) parseAdd() (interface{}, error) {
-	left, err := p.parseMul()
-	if err != nil {
-		return nil, err
-	}
-
-	tokens := []string{"+", "-"}
-	ops := []ExprOp{OP_ADD, OP_SUB}
-
-	for {
-		matchedOp := false
-		for i := range tokens {
-			if !p.tryPunctuation(tokens[i]) {
-				continue
-			}
-
-			matchedOp = true
-			right, err := p.parseMul()
-			if err != nil {
-				return nil, err
-			}
-
-			// left-associative
-			left = &ExprBinOp{op: ops[i], left: left, right: right}
-			break
-		}
-
-		if !matchedOp {
-			break
-		}
-	}
-
-	return left, nil
-}
-
-/* Parse multiplication and division. */
-func (p *Parser) parseMul() (interface{}, error) {
-	left, err := p.parseAtom()
-	if err != nil {
-		return nil, err
-	}
-
-	tokens := []string{"*", "/"}
-	ops := []ExprOp{OP_MUL, OP_DIV}
-
-	for {
-		matchedOp := false
-		for i := range tokens {
-			if !p.tryPunctuation(tokens[i]) {
-				continue
-			}
-
-			matchedOp = true
-			right, err := p.parseAtom()
-			if err != nil {
-				return nil, err
-			}
-
-			// left-associative
-			left = &ExprBinOp{op: ops[i], left: left, right: right}
-			break
-		}
-
-		if !matchedOp {
-			break
-		}
-	}
-
-	return left, nil
+type ExprUnOp struct {
+	op  ExprOp
+	kid interface{}
 }
 
 func (p *Parser) parseAtom() (expr interface{}, err error) {
@@ -573,4 +512,92 @@ func (p *Parser) parseAtom() (expr interface{}, err error) {
 		return nil, err
 	}
 	return cell, nil
+}
+
+func (p *Parser) parseBinOp(
+	tokens []string,
+	ops []ExprOp,
+	inner func() (interface{}, error), // function to parse the next precedence level
+) (interface{}, error) {
+	left, err := inner()
+	if err != nil {
+		return nil, err
+	}
+
+	for {
+		matchedOp := false
+		for i := range tokens {
+			if !p.tryPunctuation(tokens[i]) && !p.tryKeyword(tokens[i]) {
+				continue
+			}
+
+			matchedOp = true
+			right, err := inner()
+			if err != nil {
+				return nil, err
+			}
+
+			// left-associative
+			left = &ExprBinOp{op: ops[i], left: left, right: right}
+			break
+		}
+
+		if !matchedOp {
+			break
+		}
+	}
+
+	return left, nil
+}
+
+func (p *Parser) parseExpr() (interface{}, error) {
+	return p.parseOr()
+}
+
+func (p *Parser) parseOr() (interface{}, error) {
+	return p.parseBinOp([]string{"OR"}, []ExprOp{OP_OR}, p.parseAnd)
+}
+
+func (p *Parser) parseAnd() (interface{}, error) {
+	return p.parseBinOp([]string{"AND"}, []ExprOp{OP_AND}, p.parseNot)
+}
+
+func (p *Parser) parseNot() (expr interface{}, err error) {
+	if p.tryKeyword("NOT") {
+		if expr, err = p.parseNot(); err != nil {
+			return nil, err
+		}
+		return &ExprUnOp{op: OP_NOT, kid: expr}, nil
+	} else {
+		return p.parseCmp()
+	}
+}
+
+func (p *Parser) parseCmp() (expr interface{}, err error) {
+	return p.parseBinOp(
+		[]string{"=", "!=", "<>", "<=", ">=", "<", ">"},
+		[]ExprOp{OP_EQ, OP_NE, OP_NE, OP_LE, OP_GE, OP_LT, OP_GT},
+		p.parseAdd,
+	)
+}
+
+/* Parse addition and subtraction. */
+func (p *Parser) parseAdd() (interface{}, error) {
+	return p.parseBinOp([]string{"+", "-"}, []ExprOp{OP_ADD, OP_SUB}, p.parseMul)
+}
+
+/* Parse multiplication and division. */
+func (p *Parser) parseMul() (interface{}, error) {
+	return p.parseBinOp([]string{"*", "/"}, []ExprOp{OP_MUL, OP_DIV}, p.parseNeg)
+}
+
+func (p *Parser) parseNeg() (expr interface{}, err error) {
+	if p.tryPunctuation("-") {
+		if expr, err = p.parseNeg(); err != nil {
+			return nil, err
+		}
+		return &ExprUnOp{op: OP_NEG, kid: expr}, nil
+	} else {
+		return p.parseAtom()
+	}
 }
