@@ -451,10 +451,73 @@ func (p *Parser) parseDelete(out *StmtDelete) error {
 
 type ExprOp uint8
 
-// TODO: why pick these values?
 const (
-	OP_LE ExprOp = 12 // <=
-	OP_GE ExprOp = 13 // >=
-	OP_LT ExprOp = 14 // <
-	OP_GT ExprOp = 15 // >
+	OP_ADD ExprOp = 1  // +
+	OP_SUB ExprOp = 2  // -
+	OP_LE  ExprOp = 12 // <=
+	OP_GE  ExprOp = 13 // >=
+	OP_LT  ExprOp = 14 // <
+	OP_GT  ExprOp = 15 // >
 )
+
+/*
+Possible values for left and right:
+- string: represents column name.
+- &Cell{}: represents constant value.
+- &ExprBinOp{}: represents nested expression.
+*/
+type ExprBinOp struct {
+	op    ExprOp
+	left  interface{}
+	right interface{}
+}
+
+func (p *Parser) parseAtom() (interface{}, error) {
+	// column name
+	if name, ok := p.tryName(); ok {
+		return name, nil
+	}
+
+	// constant value
+	cell := &Cell{}
+	if err := p.parseValue(cell); err != nil {
+		return nil, err
+	}
+	return cell, nil
+}
+
+/* Parse addition and subtraction. */
+func (p *Parser) parseAdd() (interface{}, error) {
+	left, err := p.parseAtom()
+	if err != nil {
+		return nil, err
+	}
+
+	tokens := []string{"+", "-"}
+	ops := []ExprOp{OP_ADD, OP_SUB}
+
+	for {
+		matchedOp := false
+		for i := range tokens {
+			if !p.tryPunctuation(tokens[i]) {
+				continue
+			}
+
+			matchedOp = true
+			right, err := p.parseAtom()
+			if err != nil {
+				return nil, err
+			}
+
+			// addition and subtraction are left-associative
+			left = &ExprBinOp{op: ops[i], left: left, right: right}
+			break
+		}
+
+		if !matchedOp {
+			break
+		}
+	}
+
+	return left, nil
+}
