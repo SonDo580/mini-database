@@ -43,6 +43,13 @@ func evalExpr(schema *Schema, row Row, expr interface{}) (*Cell, error) {
 			out.I64 = left.I64 + right.I64
 		case out.Type == TypeI64 && e.op == OP_SUB:
 			out.I64 = left.I64 - right.I64
+		case out.Type == TypeI64 && e.op == OP_MUL:
+			out.I64 = left.I64 * right.I64
+		case out.Type == TypeI64 && e.op == OP_DIV:
+			if right.I64 == 0 {
+				return nil, errors.New("division by 0")
+			}
+			out.I64 = left.I64 / right.I64
 		default:
 			return nil, errors.New("bad binary op")
 		}

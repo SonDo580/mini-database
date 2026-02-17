@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestParseName(t *testing.T) {
@@ -129,4 +130,72 @@ func TestParseStmt(t *testing.T) {
 		},
 	}
 	testParseStmt(t, s, stmt)
+}
+
+func testParseExpr(t *testing.T, s string, expr interface{}) {
+	p := NewParser(s)
+	out, err := p.parseExpr()
+	require.Nil(t, err)
+	assert.Equal(t, expr, out)
+	assert.True(t, p.isEnd())
+}
+
+func TestParseExpr(t *testing.T) {
+	var expr interface{}
+
+	testParseExpr(t, "a", "a")
+	testParseExpr(t, "(a)", "a")
+	testParseExpr(t, "1", &Cell{Type: TypeI64, I64: 1})
+
+	s := "a + 1"
+	expr = &ExprBinOp{
+		op:    OP_ADD,
+		left:  "a",
+		right: &Cell{Type: TypeI64, I64: 1},
+	}
+	testParseExpr(t, s, expr)
+
+	s = "a + 1 - b"
+	expr = &ExprBinOp{
+		op: OP_SUB,
+		left: &ExprBinOp{
+			op:    OP_ADD,
+			left:  "a",
+			right: &Cell{Type: TypeI64, I64: 1},
+		},
+		right: "b",
+	}
+	testParseExpr(t, s, expr)
+
+	s = "a + b * c"
+	expr = &ExprBinOp{
+		op:   OP_ADD,
+		left: "a",
+		right: &ExprBinOp{
+			op:    OP_MUL,
+			left:  "b",
+			right: "c",
+		},
+	}
+	testParseExpr(t, s, expr)
+
+	s = "(a * b)"
+	expr = &ExprBinOp{
+		op:    OP_MUL,
+		left:  "a",
+		right: "b",
+	}
+	testParseExpr(t, s, expr)
+
+	s = "(a + b) / c"
+	expr = &ExprBinOp{
+		op: OP_DIV,
+		left: &ExprBinOp{
+			op:    OP_ADD,
+			left:  "a",
+			right: "b",
+		},
+		right: "c",
+	}
+	testParseExpr(t, s, expr)
 }

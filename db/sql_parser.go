@@ -454,6 +454,8 @@ type ExprOp uint8
 const (
 	OP_ADD ExprOp = 1  // +
 	OP_SUB ExprOp = 2  // -
+	OP_MUL ExprOp = 3  // *
+	OP_DIV ExprOp = 3  // /
 	OP_LE  ExprOp = 12 // <=
 	OP_GE  ExprOp = 13 // >=
 	OP_LT  ExprOp = 14 // <
@@ -472,23 +474,13 @@ type ExprBinOp struct {
 	right interface{}
 }
 
-func (p *Parser) parseAtom() (interface{}, error) {
-	// column name
-	if name, ok := p.tryName(); ok {
-		return name, nil
-	}
-
-	// constant value
-	cell := &Cell{}
-	if err := p.parseValue(cell); err != nil {
-		return nil, err
-	}
-	return cell, nil
+func (p *Parser) parseExpr() (interface{}, error) {
+	return p.parseAdd()
 }
 
 /* Parse addition and subtraction. */
 func (p *Parser) parseAdd() (interface{}, error) {
-	left, err := p.parseAtom()
+	left, err := p.parseMul()
 	if err != nil {
 		return nil, err
 	}
@@ -504,12 +496,12 @@ func (p *Parser) parseAdd() (interface{}, error) {
 			}
 
 			matchedOp = true
-			right, err := p.parseAtom()
+			right, err := p.parseMul()
 			if err != nil {
 				return nil, err
 			}
 
-			// addition and subtraction are left-associative
+			// left-associative
 			left = &ExprBinOp{op: ops[i], left: left, right: right}
 			break
 		}
@@ -520,4 +512,65 @@ func (p *Parser) parseAdd() (interface{}, error) {
 	}
 
 	return left, nil
+}
+
+/* Parse multiplication and division. */
+func (p *Parser) parseMul() (interface{}, error) {
+	left, err := p.parseAtom()
+	if err != nil {
+		return nil, err
+	}
+
+	tokens := []string{"*", "/"}
+	ops := []ExprOp{OP_MUL, OP_DIV}
+
+	for {
+		matchedOp := false
+		for i := range tokens {
+			if !p.tryPunctuation(tokens[i]) {
+				continue
+			}
+
+			matchedOp = true
+			right, err := p.parseAtom()
+			if err != nil {
+				return nil, err
+			}
+
+			// left-associative
+			left = &ExprBinOp{op: ops[i], left: left, right: right}
+			break
+		}
+
+		if !matchedOp {
+			break
+		}
+	}
+
+	return left, nil
+}
+
+func (p *Parser) parseAtom() (expr interface{}, err error) {
+	// grouped expression
+	if p.tryPunctuation("(") {
+		if expr, err = p.parseExpr(); err != nil {
+			return nil, err
+		}
+		if err = p.matchPunctuation(")"); err != nil {
+			return nil, err
+		}
+		return expr, nil
+	}
+
+	// column name
+	if name, ok := p.tryName(); ok {
+		return name, nil
+	}
+
+	// constant value
+	cell := &Cell{}
+	if err = p.parseValue(cell); err != nil {
+		return nil, err
+	}
+	return cell, nil
 }

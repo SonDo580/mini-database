@@ -49,6 +49,6 @@ func TestEval(t *testing.T) {
 
 	row := makeRow("A", "B", 3, 4)
 	testEval(t, schema, row, "a + b", makeCell("AB"))
-	testEval(t, schema, row, "c + d", makeCell(7))
 	testEval(t, schema, row, "c - d", makeCell(-1))
+	testEval(t, schema, row, "c * d - d * c + d", makeCell(4))
 }
