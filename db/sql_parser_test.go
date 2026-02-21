@@ -128,6 +128,19 @@ func TestParseStmt(t *testing.T) {
 		},
 	}
 	testParseStmt(t, s, stmt)
+
+	s = "delete from t where (c, d) >= (3, 4);"
+	stmt = &StmtDelete{
+		table: "t",
+		cond: &ExprBinOp{op: OP_GE,
+			left: &ExprTuple{kids: []interface{}{"c", "d"}},
+			right: &ExprTuple{kids: []interface{}{
+				&Cell{Type: TypeI64, I64: 3},
+				&Cell{Type: TypeI64, I64: 4},
+			}},
+		},
+	}
+	testParseStmt(t, s, stmt)
 }
 
 func testParseExpr(t *testing.T, s string, expr interface{}) {

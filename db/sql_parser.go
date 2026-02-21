@@ -295,18 +295,6 @@ func (p *Parser) parseWhere() (expr interface{}, err error) {
 	return expr, nil
 }
 
-func (p *Parser) parseEqual(out *NamedCell) error {
-	var ok bool
-	out.column, ok = p.tryName()
-	if !ok {
-		return errors.New("expect column")
-	}
-	if err := p.matchPunctuation("="); err != nil {
-		return err
-	}
-	return p.parseValue(&out.value)
-}
-
 func (p *Parser) parseAssign(out *ExprAssign) (err error) {
 	var ok bool
 	out.column, ok = p.tryName()
@@ -498,16 +486,15 @@ type ExprUnOp struct {
 	kid interface{}
 }
 
+type ExprTuple struct {
+	kids []interface{}
+}
+
 func (p *Parser) parseAtom() (expr interface{}, err error) {
-	// grouped expression
+	// tuple or grouped expression
 	if p.tryPunctuation("(") {
-		if expr, err = p.parseExpr(); err != nil {
-			return nil, err
-		}
-		if err = p.matchPunctuation(")"); err != nil {
-			return nil, err
-		}
-		return expr, nil
+		p.pos--
+		return p.parseTuple()
 	}
 
 	// column name
@@ -521,6 +508,30 @@ func (p *Parser) parseAtom() (expr interface{}, err error) {
 		return nil, err
 	}
 	return cell, nil
+}
+
+/* Parse tuple. If there's only 1 kid, return that kid. */
+func (p *Parser) parseTuple() (expr interface{}, err error) {
+	kids := []interface{}{}
+	err = p.parseCommaList(func() error {
+		expr, err := p.parseExpr()
+		if err != nil {
+			return err
+		}
+		kids = append(kids, expr)
+		return nil
+	})
+	if err != nil {
+		return nil, errors.New("expect tuple")
+	}
+
+	if len(kids) == 0 {
+		return nil, errors.New("empty tuple")
+	}
+	if len(kids) == 1 {
+		return kids[0], nil
+	}
+	return &ExprTuple{kids: kids}, nil
 }
 
 func (p *Parser) parseBinOp(

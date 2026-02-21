@@ -119,6 +119,8 @@ func evalExpr(schema *Schema, row Row, expr interface{}) (*Cell, error) {
 		}
 
 		return out, nil
+	case *ExprTuple:
+		return nil, errors.New("unimplemented")
 	}
 	panic("unreachable")
 }
