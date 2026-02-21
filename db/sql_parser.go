@@ -21,9 +21,14 @@ type NamedCell struct {
 	value  Cell
 }
 
+type ExprAssign struct {
+	column string
+	expr   interface{} // *ExprUnOp | *ExprBinOp | string | *Cell
+}
+
 type StmtSelect struct {
 	table string
-	cols  []string
+	cols  []interface{} // *ExprUnOp | *ExprBinOp | string | *Cell
 	keys  []NamedCell
 }
 
@@ -41,7 +46,7 @@ type StmtInsert struct {
 type StmtUpdate struct {
 	table string
 	keys  []NamedCell
-	value []NamedCell
+	value []ExprAssign
 }
 
 type StmtDelete struct {
@@ -257,15 +262,15 @@ func (p *Parser) parseSelect(out *StmtSelect) error {
 			}
 		}
 
-		if name, ok := p.tryName(); ok {
-			out.cols = append(out.cols, name)
-		} else {
-			return errors.New("expect column")
+		expr, err := p.parseExpr()
+		if err != nil {
+			return err
 		}
+		out.cols = append(out.cols, expr)
 	}
 
 	if len(out.cols) == 0 {
-		return errors.New("expect column list")
+		return errors.New("expect list of expressions")
 	}
 
 	var ok bool
@@ -311,6 +316,19 @@ func (p *Parser) parseEqual(out *NamedCell) error {
 		return err
 	}
 	return p.parseValue(&out.value)
+}
+
+func (p *Parser) parseAssign(out *ExprAssign) (err error) {
+	var ok bool
+	out.column, ok = p.tryName()
+	if !ok {
+		return errors.New("expect column")
+	}
+	if err = p.matchPunctuation("="); err != nil {
+		return err
+	}
+	out.expr, err = p.parseExpr()
+	return err
 }
 
 func (p *Parser) parseCommaList(parseItemFunc func() error) error {
@@ -427,11 +445,11 @@ func (p *Parser) parseUpdate(out *StmtUpdate) error {
 			}
 		}
 
-		var val NamedCell
-		if err := p.parseEqual(&val); err != nil {
+		var expr ExprAssign
+		if err := p.parseAssign(&expr); err != nil {
 			return err
 		}
-		out.value = append(out.value, val)
+		out.value = append(out.value, expr)
 	}
 	if len(out.value) == 0 {
 		return errors.New("expect assignment list")
@@ -465,7 +483,7 @@ const (
 	OP_ADD ExprOp = 1  // +
 	OP_SUB ExprOp = 2  // -
 	OP_MUL ExprOp = 3  // *
-	OP_DIV ExprOp = 3  // /
+	OP_DIV ExprOp = 4  // /
 	OP_EQ  ExprOp = 10 // ==
 	OP_NE  ExprOp = 11 // !=
 	OP_LE  ExprOp = 12 // <=

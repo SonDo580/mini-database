@@ -154,12 +154,11 @@ func isDescending(startCmp ExprOp) bool {
 	return startCmp == OP_LE || startCmp == OP_LT
 }
 
+// SELECT returns Header and Values.
+// Other statements return Updated.
 type SQLResult struct {
-	// SELECT returns Header and Values
 	Headers []string
 	Values  []Row
-
-	// Other statements return Updated
 	Updated int // number of affected rows
 }
 
@@ -168,7 +167,7 @@ func (db *DB) ExecStmt(stmt any) (r SQLResult, err error) {
 	case *StmtCreateTable:
 		err = db.execCreateTable(ptr)
 	case *StmtSelect:
-		r.Headers = ptr.cols
+		r.Headers = exprs2header(ptr.cols)
 		r.Values, err = db.execSelect(ptr)
 	case *StmtInsert:
 		r.Updated, err = db.execInsert(ptr)
@@ -249,23 +248,24 @@ func (db *DB) execSelect(stmt *StmtSelect) ([]Row, error) {
 		return nil, err
 	}
 
-	indices, err := lookupColumns(schema.Cols, stmt.cols)
-	if err != nil {
-		return nil, err
-	}
-
 	row, err := makePKey(&schema, stmt.keys)
 	if err != nil {
 		return nil, err
 	}
-
-	ok, err := db.Select(&schema, row)
-	if err != nil || !ok {
+	if ok, err := db.Select(&schema, row); err != nil || !ok {
 		return nil, err
 	}
 
-	row = subsetRow(row, indices)
-	return []Row{row}, nil
+	out := make(Row, len(stmt.cols))
+	for i, expr := range stmt.cols {
+		cell, err := evalExpr(&schema, row, expr)
+		if err != nil {
+			return nil, err
+		}
+		out[i] = *cell
+	}
+
+	return []Row{out}, nil
 }
 
 /* Create a row with just primary key filled. */
@@ -287,13 +287,6 @@ func makePKey(schema *Schema, pkey []NamedCell) (Row, error) {
 	}
 
 	return row, nil
-}
-
-func subsetRow(row Row, indices []int) (out Row) {
-	for _, idx := range indices {
-		out = append(out, row[idx])
-	}
-	return
 }
 
 func (db *DB) execInsert(stmt *StmtInsert) (count int, err error) {
@@ -331,8 +324,20 @@ func (db *DB) execUpdate(stmt *StmtUpdate) (count int, err error) {
 	if err != nil {
 		return 0, err
 	}
+	if ok, err := db.Select(&schema, row); err != nil || !ok {
+		return 0, err
+	}
 
-	if err = fillNonPKey(&schema, stmt.value, row); err != nil {
+	updates := make([]NamedCell, len(stmt.value))
+	for i, assign := range stmt.value {
+		cell, err := evalExpr(&schema, row, assign.expr)
+		if err != nil {
+			return 0, err
+		}
+		updates[i] = NamedCell{column: assign.column, value: *cell}
+	}
+
+	if err = fillNonPKey(&schema, updates, row); err != nil {
 		return 0, err
 	}
 

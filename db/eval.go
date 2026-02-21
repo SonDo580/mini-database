@@ -5,6 +5,7 @@ import (
 	"cmp"
 	"errors"
 	"slices"
+	"strconv"
 )
 
 /* Evaluate a parsed SQL expression. */
@@ -118,6 +119,77 @@ func evalExpr(schema *Schema, row Row, expr interface{}) (*Cell, error) {
 		}
 
 		return out, nil
+	}
+	panic("unreachable")
+}
+
+/* Convert list of expressions to returned header for select statement. */
+func exprs2header(cols []interface{}) (header []string) {
+	for _, expr := range cols {
+		header = append(header, expr2str(expr))
+	}
+	return
+}
+
+func expr2str(expr interface{}) string {
+	switch e := expr.(type) {
+	case string:
+		return e
+	case *Cell:
+		return cell2str(e)
+	case *ExprUnOp:
+		switch e.op {
+		case OP_NEG:
+			return "-" + expr2str(e.kid)
+		case OP_NOT:
+			return "NOT " + expr2str(e.kid)
+		}
+	case *ExprBinOp:
+		return "(" + expr2str(e.left) + " " + op2str(e.op) + " " + expr2str(e.right) + ")"
+	}
+	panic("unreachable")
+}
+
+func cell2str(cell *Cell) string {
+	switch cell.Type {
+	case TypeI64:
+		return strconv.FormatInt(cell.I64, 10)
+	case TypeStr:
+		return string(cell.Str)
+	}
+	panic("unreachable")
+}
+
+func op2str(op ExprOp) string {
+	switch op {
+	case OP_ADD:
+		return "+"
+	case OP_SUB:
+		return "-"
+	case OP_MUL:
+		return "*"
+	case OP_DIV:
+		return "/"
+	case OP_EQ:
+		return "="
+	case OP_NE:
+		return "!="
+	case OP_LE:
+		return "<="
+	case OP_GE:
+		return ">="
+	case OP_LT:
+		return "<"
+	case OP_GT:
+		return ">"
+	case OP_AND:
+		return "AND"
+	case OP_OR:
+		return "OR"
+	case OP_NOT:
+		return "NOT"
+	case OP_NEG:
+		return "-"
 	}
 	panic("unreachable")
 }
