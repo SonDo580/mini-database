@@ -29,7 +29,7 @@ type ExprAssign struct {
 type StmtSelect struct {
 	table string
 	cols  []interface{} // *ExprUnOp | *ExprBinOp | string | *Cell
-	keys  []NamedCell
+	cond  interface{}
 }
 
 type StmtCreateTable struct {
@@ -45,13 +45,13 @@ type StmtInsert struct {
 
 type StmtUpdate struct {
 	table string
-	keys  []NamedCell
+	cond  interface{}
 	value []ExprAssign
 }
 
 type StmtDelete struct {
 	table string
-	keys  []NamedCell
+	cond  interface{}
 }
 
 func isSpace(ch byte) bool {
@@ -254,7 +254,7 @@ func (p *Parser) parseStmt() (out any, err error) {
 	return out, nil
 }
 
-func (p *Parser) parseSelect(out *StmtSelect) error {
+func (p *Parser) parseSelect(out *StmtSelect) (err error) {
 	for !p.tryKeyword("FROM") {
 		if len(out.cols) > 0 {
 			if err := p.matchPunctuation(","); err != nil {
@@ -278,32 +278,21 @@ func (p *Parser) parseSelect(out *StmtSelect) error {
 		return errors.New("expect table name")
 	}
 
-	return p.parseWhere(&out.keys)
+	out.cond, err = p.parseWhere()
+	return err
 }
 
-func (p *Parser) parseWhere(out *[]NamedCell) error {
-	if err := p.matchKeyword("WHERE"); err != nil {
-		return err
+func (p *Parser) parseWhere() (expr interface{}, err error) {
+	if err = p.matchKeyword("WHERE"); err != nil {
+		return nil, err
 	}
-
-	for !p.tryPunctuation(";") {
-		var cell NamedCell
-		if len(*out) > 0 {
-			if err := p.matchKeyword("AND"); err != nil {
-				return err
-			}
-		}
-
-		if err := p.parseEqual(&cell); err != nil {
-			return err
-		}
-		*out = append(*out, cell)
+	if expr, err = p.parseExpr(); err != nil {
+		return nil, err
 	}
-
-	if len(*out) == 0 {
-		return errors.New("expect where clause")
+	if err = p.matchPunctuation(";"); err != nil {
+		return nil, err
 	}
-	return nil
+	return expr, nil
 }
 
 func (p *Parser) parseEqual(out *NamedCell) error {
@@ -429,13 +418,13 @@ func (p *Parser) parseInsert(out *StmtInsert) error {
 	return p.matchPunctuation(";")
 }
 
-func (p *Parser) parseUpdate(out *StmtUpdate) error {
+func (p *Parser) parseUpdate(out *StmtUpdate) (err error) {
 	var ok bool
 	if out.table, ok = p.tryName(); !ok {
 		return errors.New("expect table name")
 	}
 
-	if err := p.matchKeyword("SET"); err != nil {
+	if err = p.matchKeyword("SET"); err != nil {
 		return err
 	}
 	for !p.tryKeyword("WHERE") {
@@ -456,15 +445,17 @@ func (p *Parser) parseUpdate(out *StmtUpdate) error {
 	}
 
 	p.pos -= len("WHERE")
-	return p.parseWhere(&out.keys)
+	out.cond, err = p.parseWhere()
+	return err
 }
 
-func (p *Parser) parseDelete(out *StmtDelete) error {
+func (p *Parser) parseDelete(out *StmtDelete) (err error) {
 	var ok bool
 	if out.table, ok = p.tryName(); !ok {
 		return errors.New("expect table name")
 	}
-	return p.parseWhere(&out.keys)
+	out.cond, err = p.parseWhere()
+	return err
 }
 
 type ExprOp uint8

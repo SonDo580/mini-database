@@ -248,7 +248,7 @@ func (db *DB) execSelect(stmt *StmtSelect) ([]Row, error) {
 		return nil, err
 	}
 
-	row, err := makePKey(&schema, stmt.keys)
+	row, err := matchPKey(&schema, stmt.cond)
 	if err != nil {
 		return nil, err
 	}
@@ -266,6 +266,51 @@ func (db *DB) execSelect(stmt *StmtSelect) ([]Row, error) {
 	}
 
 	return []Row{out}, nil
+}
+
+func matchPKey(schema *Schema, cond interface{}) (Row, error) {
+	if keys, ok := matchAllEq(cond, nil); ok {
+		return makePKey(schema, keys)
+	}
+	return nil, errors.New("unimplemented WHERE")
+}
+
+/* Example match: a = 1 AND b = 'b' AND 1 = c ... */
+func matchAllEq(cond interface{}, out []NamedCell) ([]NamedCell, bool) {
+	expr, ok := cond.(*ExprBinOp)
+	if !ok {
+		return nil, false
+	}
+
+	if expr.op == OP_EQ {
+		left, right := expr.left, expr.right
+		column, ok := left.(string)
+		if !ok {
+			left, right = right, left
+			column, ok = left.(string)
+		}
+		if !ok {
+			return nil, false
+		}
+
+		cell, ok := right.(*Cell)
+		if !ok {
+			return nil, false
+		}
+		return append(out, NamedCell{column: column, value: *cell}), true
+	}
+
+	if expr.op == OP_AND {
+		if out, ok = matchAllEq(expr.left, out); !ok {
+			return nil, false
+		}
+		if out, ok = matchAllEq(expr.right, out); !ok {
+			return nil, false
+		}
+		return out, true
+	}
+
+	return nil, false
 }
 
 /* Create a row with just primary key filled. */
@@ -320,7 +365,7 @@ func (db *DB) execUpdate(stmt *StmtUpdate) (count int, err error) {
 		return 0, err
 	}
 
-	row, err := makePKey(&schema, stmt.keys)
+	row, err := matchPKey(&schema, stmt.cond)
 	if err != nil {
 		return 0, err
 	}
@@ -375,7 +420,7 @@ func (db *DB) execDelete(stmt *StmtDelete) (count int, err error) {
 		return 0, err
 	}
 
-	row, err := makePKey(&schema, stmt.keys)
+	row, err := matchPKey(&schema, stmt.cond)
 	if err != nil {
 		return 0, err
 	}

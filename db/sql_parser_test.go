@@ -52,13 +52,13 @@ func testParseStmt(t *testing.T, s string, ref any) {
 }
 
 func TestParseStmt(t *testing.T) {
-	var stmt any
+	var stmt interface{}
 
 	s := "select a from t where c=1;"
 	stmt = &StmtSelect{
 		table: "t",
 		cols:  []interface{}{"a"},
-		keys:  []NamedCell{{column: "c", value: Cell{Type: TypeI64, I64: 1}}},
+		cond:  &ExprBinOp{op: OP_EQ, left: "c", right: &Cell{Type: TypeI64, I64: 1}},
 	}
 	testParseStmt(t, s, stmt)
 
@@ -66,9 +66,9 @@ func TestParseStmt(t *testing.T) {
 	stmt = &StmtSelect{
 		table: "t",
 		cols:  []interface{}{"a", "b_02"},
-		keys: []NamedCell{
-			{column: "c", value: Cell{Type: TypeI64, I64: 1}},
-			{column: "d", value: Cell{Type: TypeStr, Str: []byte("e")}},
+		cond: &ExprBinOp{op: OP_AND,
+			left:  &ExprBinOp{op: OP_EQ, left: "c", right: &Cell{Type: TypeI64, I64: 1}},
+			right: &ExprBinOp{op: OP_EQ, left: "d", right: &Cell{Type: TypeStr, Str: []byte("e")}},
 		},
 	}
 	testParseStmt(t, s, stmt)
@@ -101,9 +101,9 @@ func TestParseStmt(t *testing.T) {
 			{column: "a", expr: &Cell{Type: TypeI64, I64: 1}},
 			{column: "b", expr: &Cell{Type: TypeStr, Str: []byte("hi")}},
 		},
-		keys: []NamedCell{
-			{column: "c", value: Cell{Type: TypeI64, I64: 3}},
-			{column: "d", value: Cell{Type: TypeStr, Str: []byte("x")}},
+		cond: &ExprBinOp{op: OP_AND,
+			left:  &ExprBinOp{op: OP_EQ, left: "c", right: &Cell{Type: TypeI64, I64: 3}},
+			right: &ExprBinOp{op: OP_EQ, left: "d", right: &Cell{Type: TypeStr, Str: []byte("x")}},
 		},
 	}
 	testParseStmt(t, s, stmt)
@@ -115,18 +115,16 @@ func TestParseStmt(t *testing.T) {
 			{column: "a", expr: &Cell{Type: TypeI64, I64: 1}},
 			{column: "b", expr: &Cell{Type: TypeStr, Str: []byte("hi")}},
 		},
-		keys: []NamedCell{
-			{column: "c", value: Cell{Type: TypeI64, I64: 3}},
-		},
+		cond: &ExprBinOp{op: OP_EQ, left: "c", right: &Cell{Type: TypeI64, I64: 3}},
 	}
 	testParseStmt(t, s, stmt)
 
 	s = "delete from t where c = 3 and d = 4;"
 	stmt = &StmtDelete{
 		table: "t",
-		keys: []NamedCell{
-			{column: "c", value: Cell{Type: TypeI64, I64: 3}},
-			{column: "d", value: Cell{Type: TypeI64, I64: 4}},
+		cond: &ExprBinOp{op: OP_AND,
+			left:  &ExprBinOp{op: OP_EQ, left: "c", right: &Cell{Type: TypeI64, I64: 3}},
+			right: &ExprBinOp{op: OP_EQ, left: "d", right: &Cell{Type: TypeI64, I64: 4}},
 		},
 	}
 	testParseStmt(t, s, stmt)
