@@ -2,7 +2,9 @@ package db
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/binary"
+	"errors"
 	"io"
 	"os"
 )
@@ -24,6 +26,7 @@ type SortedKVIter interface {
 type SortedFile struct {
 	FileName string
 	fp       *os.File
+	nkeys    int
 }
 
 func (file *SortedFile) Close() error {
@@ -113,6 +116,7 @@ func (file *SortedFile) writeSortedFile(kv SortedKV) (err error) {
 	}
 	offsetWritten += nn
 
+	nkeys := 0
 	for ; sortedKVIter.Valid(); sortedKVIter.Next() {
 		k := sortedKVIter.Key()
 		v := sortedKVIter.Val()
@@ -150,6 +154,7 @@ func (file *SortedFile) writeSortedFile(kv SortedKV) (err error) {
 		if err != nil {
 			return err
 		}
+		nkeys++
 	}
 
 	// Write buffered data to OS page cache
@@ -162,6 +167,125 @@ func (file *SortedFile) writeSortedFile(kv SortedKV) (err error) {
 		return err
 	}
 
+	check(nkeys == kvSize)
+	file.nkeys = nkeys
+
 	// fsync (write to disk)
 	return file.fp.Sync()
+}
+
+func (file *SortedFile) Size() int {
+	return file.nkeys
+}
+
+func (file *SortedFile) Iter() (SortedKVIter, error) {
+	iter := &SortedFileIter{file: file, pos: 0}
+	if err := iter.loadCurrent(); err != nil {
+		return nil, err
+	}
+	return iter, nil
+}
+
+func (file *SortedFile) Seek(key []byte) (SortedKVIter, error) {
+	pos, err := file.binarySearch(key, 0, file.nkeys-1)
+	if err != nil {
+		return nil, err
+	}
+
+	iter := &SortedFileIter{file: file, pos: pos}
+	if err = iter.loadCurrent(); err != nil {
+		return nil, err
+	}
+	return iter, nil
+}
+
+/* Find index of the first entry >= key. */
+func (file *SortedFile) binarySearch(
+	key []byte, left int, right int,
+) (pos int, err error) {
+	for left <= right {
+		mid := (left + right) / 2 // floor division
+		k, _, err := file.index(mid)
+		if err != nil {
+			return -1, err
+		}
+
+		r := bytes.Compare(k, key)
+		if r == 0 {
+			return mid, nil
+		} else if r < 0 {
+			left = mid + 1
+		} else {
+			right = mid - 1
+		}
+	}
+
+	return left, nil
+}
+
+type SortedFileIter struct {
+	file *SortedFile
+	pos  int
+	key  []byte
+	val  []byte
+}
+
+func (iter *SortedFileIter) Valid() bool {
+	return 0 <= iter.pos && iter.pos < iter.file.nkeys
+}
+
+func (iter *SortedFileIter) Key() []byte {
+	return iter.key
+}
+
+func (iter *SortedFileIter) Val() []byte {
+	return iter.val
+}
+
+func (iter *SortedFileIter) Next() error {
+	if iter.pos < iter.file.nkeys {
+		iter.pos++
+	}
+	return iter.loadCurrent()
+}
+
+func (iter *SortedFileIter) Prev() error {
+	if iter.pos >= 0 {
+		iter.pos--
+	}
+	return iter.loadCurrent()
+}
+
+func (iter *SortedFileIter) loadCurrent() (err error) {
+	if iter.Valid() {
+		iter.key, iter.val, err = iter.file.index(iter.pos)
+	}
+	return err
+}
+
+/* Read the pos-th KV pair. */
+func (file *SortedFile) index(pos int) (key []byte, val []byte, err error) {
+	// Read KV offset
+	var buf [8]byte
+	if _, err = file.fp.ReadAt(buf[:], int64(8+8*pos)); err != nil {
+		return nil, nil, err
+	}
+	offset := int64(binary.LittleEndian.Uint64(buf[:]))
+	if offset < int64(8+8*file.nkeys) {
+		return nil, nil, errors.New("corrupted file")
+	}
+
+	// Read KV metadata
+	if _, err = file.fp.ReadAt(buf[:], offset); err != nil {
+		return nil, nil, err
+	}
+	k_len := int(binary.LittleEndian.Uint32(buf[:4]))
+	v_len := int(binary.LittleEndian.Uint32(buf[4:]))
+
+	// Read KV data
+	data := make([]byte, k_len+v_len)
+	if _, err = file.fp.ReadAt(data, offset+4+4); err != nil {
+		return nil, nil, err
+	}
+	return data[:k_len], data[k_len:], nil
 }

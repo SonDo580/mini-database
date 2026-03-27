@@ -41,4 +41,18 @@ func TestSortedFile(t *testing.T) {
 	data, err := os.ReadFile(sf.FileName)
 	require.Nil(t, err)
 	assert.Equal(t, expected, data)
+
+	iter, err := sf.Iter()
+	i := 0
+	for ; err == nil && iter.Valid(); err = iter.Next() {
+		assert.Equal(t, keys[i], iter.Key())
+		assert.Equal(t, vals[i], iter.Val())
+		i++
+	}
+	require.Nil(t, err)
+
+	iter, err = sf.Seek([]byte("xx"))
+	require.Nil(t, err)
+	assert.True(t, iter.Valid())
+	assert.Equal(t, []byte("y"), iter.Key())
 }
