@@ -5,12 +5,9 @@ import (
 	"slices"
 )
 
-// Use arrays to support sorting and range queries
-// TODO: Use LSM tree
 type KV struct {
-	log  Log
-	keys [][]byte
-	vals [][]byte
+	log Log
+	mem SortedArray
 }
 
 func (kv *KV) Open() error {
@@ -18,32 +15,37 @@ func (kv *KV) Open() error {
 		return err
 	}
 
-	kv.keys = [][]byte{}
-	kv.vals = [][]byte{}
+	entries := []Entry{}
 	for {
 		ent := Entry{}
 		eof, err := kv.log.Read(&ent)
 		if err != nil {
 			return err
-		}
-		if eof {
+		} else if eof {
 			break
 		}
-
-		key := ent.key
-		val := ent.val
-		idx, exists := slices.BinarySearchFunc(kv.keys, key, bytes.Compare)
-		if ent.deleted {
-			kv.keys = slices.Delete(kv.keys, idx, idx+1)
-			kv.vals = slices.Delete(kv.vals, idx, idx+1)
-		} else if exists {
-			kv.vals[idx] = val
-		} else {
-			kv.keys = slices.Insert(kv.keys, idx, key)
-			kv.vals = slices.Insert(kv.vals, idx, val)
-		}
+		entries = append(entries, ent)
 	}
 
+	// Use stable sort to preserve logged order for the same key
+	slices.SortStableFunc(entries, func(a, b Entry) int {
+		return bytes.Compare(a.key, b.key)
+	})
+
+	kv.mem.Clear()
+	for _, ent := range entries {
+		// Only use the last entry of each key
+		// (Note that all entries for a key are adjacent due to sorting)
+		n := kv.mem.Size()
+		if n > 0 && bytes.Equal(kv.mem.Key(n-1), ent.key) {
+			kv.mem.Pop()
+		}
+
+		// Don't add deleted entries
+		if !ent.deleted {
+			kv.mem.Push(ent.key, ent.val)
+		}
+	}
 	return nil
 }
 
@@ -52,10 +54,7 @@ func (kv *KV) Close() error {
 }
 
 func (kv *KV) Get(key []byte) (val []byte, ok bool, err error) {
-	if idx, ok := slices.BinarySearchFunc(kv.keys, key, bytes.Compare); ok {
-		return kv.vals[idx], true, nil
-	}
-	return nil, false, nil
+	return kv.mem.Get(key)
 }
 
 type UpdateMode int
@@ -67,15 +66,19 @@ const (
 )
 
 func (kv *KV) SetEx(key []byte, val []byte, mode UpdateMode) (updated bool, err error) {
-	idx, exists := slices.BinarySearchFunc(kv.keys, key, bytes.Compare)
+	existing_val, exists, err := kv.Get(key)
+	if err != nil {
+		return false, err
+	}
+
 	var needUpdate bool
 	switch mode {
 	case ModeUpsert:
-		needUpdate = !exists || !bytes.Equal(kv.vals[idx], val)
+		needUpdate = !exists || !bytes.Equal(existing_val, val)
 	case ModeInsert:
 		needUpdate = !exists
 	case ModeUpdate:
-		needUpdate = exists && !bytes.Equal(kv.vals[idx], val)
+		needUpdate = exists && !bytes.Equal(existing_val, val)
 	default:
 		panic("unreachable")
 	}
@@ -84,16 +87,10 @@ func (kv *KV) SetEx(key []byte, val []byte, mode UpdateMode) (updated bool, err 
 		if err = kv.log.Write(&Entry{key: key, val: val}); err != nil {
 			return false, err
 		}
-
-		if exists {
-			kv.vals[idx] = val
-		} else {
-			kv.keys = slices.Insert(kv.keys, idx, key)
-			kv.vals = slices.Insert(kv.vals, idx, val)
-		}
-		updated = true
+		updated, err = kv.mem.Set(key, val)
+		check(err == nil)
 	}
-	return
+	return updated, nil
 }
 
 func (kv *KV) Set(key []byte, val []byte) (updated bool, err error) {
@@ -101,64 +98,23 @@ func (kv *KV) Set(key []byte, val []byte) (updated bool, err error) {
 }
 
 func (kv *KV) Del(key []byte) (deleted bool, err error) {
-	idx, exists := slices.BinarySearchFunc(kv.keys, key, bytes.Compare)
-	if exists {
-		if err = kv.log.Write(&Entry{key: key, deleted: true}); err != nil {
-			return false, nil
-		}
-
-		kv.keys = slices.Delete(kv.keys, idx, idx+1)
-		kv.vals = slices.Delete(kv.vals, idx, idx+1)
-		deleted = true
+	if _, exists, err := kv.Get(key); err != nil || !exists {
+		return false, err
 	}
-	return
-}
-
-type KVIterator struct {
-	keys [][]byte // reference kv.keys
-	vals [][]byte // reference kv.vals
-	pos  int      // current position
-}
-
-/* Point to the first key >= key */
-func (kv *KV) Seek(key []byte) (*KVIterator, error) {
-	pos, _ := slices.BinarySearchFunc(kv.keys, key, bytes.Compare)
-	return &KVIterator{keys: kv.keys, vals: kv.vals, pos: pos}, nil
-}
-
-/* True if still in key range */
-func (kvIter *KVIterator) Valid() bool {
-	return 0 <= kvIter.pos && kvIter.pos < len(kvIter.keys)
-}
-
-/* Key of current entry */
-func (kvIter *KVIterator) Key() []byte {
-	return kvIter.keys[kvIter.pos]
-}
-
-/* Value of current entry */
-func (kvIter *KVIterator) Val() []byte {
-	return kvIter.vals[kvIter.pos]
-}
-
-/* Move to the next entry */
-func (kvIter *KVIterator) Next() error {
-	if kvIter.pos < len(kvIter.keys) {
-		kvIter.pos++
+	if err = kv.log.Write(&Entry{key: key, deleted: true}); err != nil {
+		return false, nil
 	}
-	return nil
+	deleted, err = kv.mem.Del(key)
+	check(err == nil)
+	return deleted, err
 }
 
-/* Move to the previous entry */
-func (kvIter *KVIterator) Prev() error {
-	if kvIter.pos >= 0 {
-		kvIter.pos--
-	}
-	return nil
+func (kv *KV) Seek(key []byte) (SortedKVIter, error) {
+	return kv.mem.Seek(key)
 }
 
 type RangedKVIter struct {
-	kvIter KVIterator
+	kvIter SortedKVIter
 	stop   []byte // Stop key
 	desc   bool   // True if iterate in descending order
 }
@@ -218,7 +174,7 @@ func (kv *KV) Range(start, stop []byte, desc bool) (*RangedKVIter, error) {
 	}
 
 	rangedKVIter := &RangedKVIter{
-		kvIter: *kvIter,
+		kvIter: kvIter,
 		stop:   stop,
 		desc:   desc,
 	}

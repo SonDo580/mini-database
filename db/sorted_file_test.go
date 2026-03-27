@@ -8,19 +8,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-type SortedArray struct {
-	keys [][]byte
-	vals [][]byte
-}
-
-func (arr *SortedArray) Size() int {
-	return len(arr.keys)
-}
-
-func (arr *SortedArray) Iter() (SortedKVIter, error) {
-	return &KVIterator{keys: arr.keys, vals: arr.vals, pos: 0}, nil
-}
-
 func TestSortedFile(t *testing.T) {
 	sf := SortedFile{FileName: ".test_sorted_file"}
 	defer os.Remove(sf.FileName)
