@@ -6,18 +6,21 @@ import (
 	"encoding/binary"
 	"errors"
 	"io"
+	"io/fs"
 	"os"
 )
 
 type SortedKV interface {
-	Size() int
+	EstimatedSize() int
 	Iter() (SortedKVIter, error)
+	Seek(key []byte) (SortedKVIter, error)
 }
 
 type SortedKVIter interface {
 	Valid() bool
 	Key() []byte
 	Val() []byte
+	Deleted() bool
 	Next() error
 	Prev() error
 }
@@ -29,14 +32,47 @@ type SortedFile struct {
 	nkeys    int
 }
 
+func (file *SortedFile) EstimatedSize() int {
+	return file.nkeys
+}
+
 func (file *SortedFile) Close() error {
+	if file.fp == nil {
+		return nil
+	}
 	return file.fp.Close()
+}
+
+func (file *SortedFile) Open() (err error) {
+	file.fp, err = os.OpenFile(file.FileName, os.O_RDONLY, 0o644)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil
+		}
+		return err
+	}
+	if err = file.openExisting(); err != nil {
+		_ = file.Close()
+	}
+	return err
+}
+
+func (file *SortedFile) openExisting() error {
+	var buf [8]byte
+	if _, err := file.fp.ReadAt(buf[:8], 0); err != nil {
+		return err
+	}
+	file.nkeys = int(binary.LittleEndian.Uint64(buf[:8]))
+	return nil
 }
 
 /*
 SSTable format:
-[ n keys | offset1 | ... | offsetn | KV1 | ... | KVn ]
+[ n keys | offset1 | ... | offsetn | gap | KV1 | ... | KVn ]
   8 bytes  8 bytes
+
+- Over-allocating the offset array creates unused gap in the file.
+  But this gap doesn't waste disk space due to 'sparse file' feature.
 
 KV format:
 [ key length | val length | key data | val data ]
@@ -67,8 +103,7 @@ func (w *OffsetWriter) Write(data []byte) (n int, err error) {
 }
 
 func (file *SortedFile) writeSortedFile(kv SortedKV) (err error) {
-	kvSize := kv.Size()
-	sortedKVIter, err := kv.Iter()
+	iter, err := kv.Iter()
 	if err != nil {
 		return err
 	}
@@ -86,53 +121,25 @@ func (file *SortedFile) writeSortedFile(kv SortedKV) (err error) {
 
 	offsetRegionWriter := bufio.NewWriter(&OffsetWriter{
 		writer: file.fp,
-		offset: 0,
+		offset: 8, // fill nkeys later
 	})
-	offsetRegionSize := 8 * (1 + kvSize)
 
+	offsetRegionSize := 8 * (1 + kv.EstimatedSize())
 	kvRegionWriter := bufio.NewWriter(&OffsetWriter{
 		writer: file.fp,
 		offset: int64(offsetRegionSize),
 	})
 
-	var nn int
-	offsetWritten := 0 // count number of bytes written to offset region
-
-	// Write number of keys
-	nn, err = offsetRegionWriter.Write(
-		binary.LittleEndian.AppendUint64(nil, uint64(kvSize)),
-	)
-	if err != nil {
-		return err
-	}
-	offsetWritten += nn
-
-	// Write offset of the first KV
-	nn, err = offsetRegionWriter.Write(
-		binary.LittleEndian.AppendUint64(nil, uint64(offsetRegionSize)),
-	)
-	if err != nil {
-		return err
-	}
-	offsetWritten += nn
-
 	nkeys := 0
-	for ; sortedKVIter.Valid(); sortedKVIter.Next() {
-		k := sortedKVIter.Key()
-		v := sortedKVIter.Val()
+	offset := offsetRegionSize // offset of current KV
 
-		// Write offset of the next KV
-		if offsetWritten < offsetRegionSize {
-			nn, err = offsetRegionWriter.Write(
-				binary.LittleEndian.AppendUint64(nil,
-					uint64(offsetRegionSize+4+4+len(k)+len(v))),
-			)
-			if err != nil {
-				return err
-			}
-			offsetWritten += nn
+	for ; iter.Valid(); iter.Next() {
+		// Skip deleted entries
+		if iter.Deleted() {
+			continue
 		}
 
+		k, v := iter.Key(), iter.Val()
 		// Write current KV
 		_, err = kvRegionWriter.Write(
 			binary.LittleEndian.AppendUint32(nil, uint32(len(k))),
@@ -154,8 +161,23 @@ func (file *SortedFile) writeSortedFile(kv SortedKV) (err error) {
 		if err != nil {
 			return err
 		}
+
+		// Write offset of current KV
+		_, err = offsetRegionWriter.Write(
+			binary.LittleEndian.AppendUint64(nil, uint64(offset)),
+		)
+		if err != nil {
+			return err
+		}
+
 		nkeys++
+		offset += 4 + 4 + len(k) + len(v) // offset for next KV
 	}
+
+	check(nkeys <= kv.EstimatedSize())
+	file.nkeys = nkeys
+	// Write number of keys (to OS page cache)
+	file.fp.WriteAt(binary.LittleEndian.AppendUint64(nil, uint64(nkeys)), 0)
 
 	// Write buffered data to OS page cache
 	err = offsetRegionWriter.Flush()
@@ -166,9 +188,6 @@ func (file *SortedFile) writeSortedFile(kv SortedKV) (err error) {
 	if err != nil {
 		return err
 	}
-
-	check(nkeys == kvSize)
-	file.nkeys = nkeys
 
 	// fsync (write to disk)
 	return file.fp.Sync()
@@ -240,6 +259,10 @@ func (iter *SortedFileIter) Key() []byte {
 
 func (iter *SortedFileIter) Val() []byte {
 	return iter.val
+}
+
+func (iter *SortedFileIter) Deleted() bool {
+	return false
 }
 
 func (iter *SortedFileIter) Next() error {

@@ -13,11 +13,13 @@ import (
 
 func TestKVBasic(t *testing.T) {
 	kv := KV{}
-
-	kv.log.FileName = ".test_db"
+	kv.log.FileName = ".test_db_log"
+	kv.main.FileName = ".test_db_main"
 	defer os.Remove(kv.log.FileName)
+	defer os.Remove(kv.main.FileName)
 
 	os.Remove(kv.log.FileName)
+	os.Remove(kv.main.FileName)
 	err := kv.Open()
 	assert.Nil(t, err)
 	defer kv.Close()
@@ -34,15 +36,6 @@ func TestKVBasic(t *testing.T) {
 	deleted, err := kv.Del([]byte("xxx"))
 	assert.True(t, !deleted && err == nil)
 
-	updated, err = kv.Set([]byte("k1"), []byte("v1"))
-	assert.True(t, !updated && err == nil)
-
-	updated, err = kv.Set([]byte("k1"), []byte("v12"))
-	assert.True(t, updated && err == nil)
-
-	val, ok, err = kv.Get([]byte("k1"))
-	assert.True(t, string(val) == "v12" && ok && err == nil)
-
 	deleted, err = kv.Del([]byte("k1"))
 	assert.True(t, deleted && err == nil)
 
@@ -52,19 +45,52 @@ func TestKVBasic(t *testing.T) {
 	updated, err = kv.Set([]byte("k2"), []byte("v2"))
 	assert.True(t, updated && err == nil)
 
-	val, ok, err = kv.Get([]byte("k2"))
-	assert.True(t, string(val) == "v2" && ok && err == nil)
+	updated, err = kv.Set([]byte("k3"), []byte("v3"))
+	assert.True(t, updated && err == nil)
 
-	// Close and re-open
+	// Reopen
 	kv.Close()
 	err = kv.Open()
-	assert.Nil(t, err)
+	require.Nil(t, err)
 
 	_, ok, err = kv.Get([]byte("k1"))
 	assert.True(t, !ok && err == nil)
 
 	val, ok, err = kv.Get([]byte("k2"))
 	assert.True(t, string(val) == "v2" && ok && err == nil)
+
+	// Compact
+	err = kv.Compact()
+	require.Nil(t, err)
+
+	_, ok, err = kv.Get([]byte("k1"))
+	assert.True(t, !ok && err == nil)
+
+	val, ok, err = kv.Get([]byte("k2"))
+	assert.True(t, string(val) == "v2" && ok && err == nil)
+
+	updated, err = kv.Set([]byte("k2"), []byte("v2"))
+	assert.True(t, !updated && err == nil)
+
+	deleted, err = kv.Del([]byte("k3"))
+	assert.True(t, deleted && err == nil)
+
+	_, ok, err = kv.Get([]byte("k3"))
+	assert.True(t, !ok && err == nil)
+
+	// Reopen
+	kv.Close()
+	err = kv.Open()
+	require.Nil(t, err)
+
+	_, ok, err = kv.Get([]byte("k1"))
+	assert.True(t, !ok && err == nil)
+
+	val, ok, err = kv.Get([]byte("k2"))
+	assert.True(t, string(val) == "v2" && ok && err == nil)
+
+	_, ok, err = kv.Get([]byte("k3"))
+	assert.True(t, !ok && err == nil)
 }
 
 func TestKVUpdateMode(t *testing.T) {
@@ -174,10 +200,13 @@ func TestEntryEncodeDecode(t *testing.T) {
 
 func TestKVSeek(t *testing.T) {
 	kv := KV{}
-	kv.log.FileName = ".test_db"
+	kv.log.FileName = ".test_db_log"
+	kv.main.FileName = ".test_db_main"
 	defer os.Remove(kv.log.FileName)
+	defer os.Remove(kv.main.FileName)
 
 	os.Remove(kv.log.FileName)
+	os.Remove(kv.main.FileName)
 	err := kv.Open()
 	assert.Nil(t, err)
 	defer kv.Close()

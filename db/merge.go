@@ -5,6 +5,14 @@ import "bytes"
 // Combine different levels (MemTable, SSTables)
 type MergedSortedKV []SortedKV
 
+func (m MergedSortedKV) EstimatedSize() (total int) {
+	// estimated since each level can include deleted keys
+	for _, sub := range m {
+		total += sub.EstimatedSize()
+	}
+	return total
+}
+
 func (m MergedSortedKV) Iter() (iter SortedKVIter, err error) {
 	levels := make([]SortedKVIter, len(m))
 	for i, sub := range m {
@@ -14,7 +22,20 @@ func (m MergedSortedKV) Iter() (iter SortedKVIter, err error) {
 	}
 	return &MergedSortedKVIter{
 		levels: levels,
-		which:  levelsSmallest(levels),
+		which:  levelsLowest(levels),
+	}, nil
+}
+
+func (m MergedSortedKV) Seek(key []byte) (iter SortedKVIter, err error) {
+	levels := make([]SortedKVIter, len(m))
+	for i, sub := range m {
+		if levels[i], err = sub.Seek(key); err != nil {
+			return nil, err
+		}
+	}
+	return &MergedSortedKVIter{
+		levels: levels,
+		which:  levelsLowest(levels),
 	}, nil
 }
 
@@ -41,6 +62,10 @@ func (iter *MergedSortedKVIter) Val() []byte {
 	return iter.levels[iter.which].Val()
 }
 
+func (iter *MergedSortedKVIter) Deleted() bool {
+	return iter.levels[iter.which].Deleted()
+}
+
 func (iter *MergedSortedKVIter) Next() error {
 	currKey := []byte(nil) // indicate no current key
 	if iter.Valid() {
@@ -61,7 +86,7 @@ func (iter *MergedSortedKVIter) Next() error {
 			}
 		}
 	}
-	iter.which = levelsSmallest(iter.levels)
+	iter.which = levelsLowest(iter.levels)
 	return nil
 }
 
@@ -84,8 +109,8 @@ func (iter *MergedSortedKVIter) Prev() error {
 	return nil
 }
 
-/* Find level with current smallest key. */
-func levelsSmallest(levels []SortedKVIter) int {
+/* Find level with current lowest key. */
+func levelsLowest(levels []SortedKVIter) int {
 	winIdx := -1
 	winKey := []byte(nil)
 	for i, sub := range levels {

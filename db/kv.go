@@ -2,18 +2,37 @@ package db
 
 import (
 	"bytes"
+	"os"
+	"path"
 	"slices"
 )
 
 type KV struct {
-	log Log
-	mem SortedArray
+	log          Log
+	mem          SortedArray
+	main         SortedFile
+	MultiClosers // struct embedding
 }
 
-func (kv *KV) Open() error {
+func (kv *KV) Open() (err error) {
+	if err = kv.openAll(); err != nil {
+		_ = kv.Close()
+	}
+	return err
+}
+
+func (kv *KV) openAll() error {
+	if err := kv.openLog(); err != nil {
+		return err
+	}
+	return kv.openSSTable()
+}
+
+func (kv *KV) openLog() error {
 	if err := kv.log.Open(); err != nil {
 		return err
 	}
+	kv.MultiClosers = append(kv.MultiClosers, &kv.log)
 
 	entries := []Entry{}
 	for {
@@ -40,21 +59,28 @@ func (kv *KV) Open() error {
 		if n > 0 && bytes.Equal(kv.mem.Key(n-1), ent.key) {
 			kv.mem.Pop()
 		}
-
-		// Don't add deleted entries
-		if !ent.deleted {
-			kv.mem.Push(ent.key, ent.val)
-		}
+		kv.mem.Push(ent.key, ent.val, ent.deleted)
 	}
 	return nil
 }
 
-func (kv *KV) Close() error {
-	return kv.log.Close()
+func (kv *KV) openSSTable() error {
+	if kv.main.FileName != "" {
+		if err := kv.main.Open(); err != nil {
+			return err
+		}
+		kv.MultiClosers = append(kv.MultiClosers, &kv.main)
+	}
+	return nil
 }
 
 func (kv *KV) Get(key []byte) (val []byte, ok bool, err error) {
-	return kv.mem.Get(key)
+	iter, err := kv.Seek(key)
+	ok = err == nil && iter.Valid() && bytes.Equal(iter.Key(), key)
+	if ok {
+		val = iter.Val()
+	}
+	return val, ok, err
 }
 
 type UpdateMode int
@@ -102,7 +128,7 @@ func (kv *KV) Del(key []byte) (deleted bool, err error) {
 		return false, err
 	}
 	if err = kv.log.Write(&Entry{key: key, deleted: true}); err != nil {
-		return false, nil
+		return false, err
 	}
 	deleted, err = kv.mem.Del(key)
 	check(err == nil)
@@ -110,7 +136,42 @@ func (kv *KV) Del(key []byte) (deleted bool, err error) {
 }
 
 func (kv *KV) Seek(key []byte) (SortedKVIter, error) {
-	return kv.mem.Seek(key)
+	m := MergedSortedKV{&kv.mem, &kv.main}
+	iter, err := m.Seek(key)
+	if err != nil {
+		return nil, err
+	}
+	return filterDeleted(iter)
+}
+
+/* Return a SortedKVIter that skip deleted keys. */
+func filterDeleted(iter SortedKVIter) (SortedKVIter, error) {
+	for iter.Valid() && iter.Deleted() {
+		if err := iter.Next(); err != nil {
+			return nil, err
+		}
+	}
+	return NoDeletedIter{iter}, nil
+}
+
+type NoDeletedIter struct {
+	SortedKVIter // struct embedding
+}
+
+func (iter NoDeletedIter) Next() (err error) {
+	err = iter.SortedKVIter.Next()
+	for err == nil && iter.Valid() && iter.Deleted() {
+		err = iter.SortedKVIter.Next()
+	}
+	return err
+}
+
+func (iter NoDeletedIter) Prev() (err error) {
+	err = iter.SortedKVIter.Prev()
+	for err == nil && iter.Valid() && iter.Deleted() {
+		err = iter.SortedKVIter.Prev()
+	}
+	return err
 }
 
 type RangedKVIter struct {
@@ -179,4 +240,36 @@ func (kv *KV) Range(start, stop []byte, desc bool) (*RangedKVIter, error) {
 		desc:   desc,
 	}
 	return rangedKVIter, nil
+}
+
+/* Merge MemTable (mirroring the log) and SSTable to produce a new SSTable. */
+func (kv *KV) Compact() error {
+	// Merge MemTable and SSTable, output to a temporary file
+	check(kv.main.FileName != "")
+	fp, err := os.CreateTemp(path.Dir(kv.main.FileName), "tmp_sstable")
+	if err != nil {
+		return err
+	}
+	filename := fp.Name()
+	_ = fp.Close()
+	defer os.Remove(filename)
+
+	file := SortedFile{FileName: filename}
+	m := MergedSortedKV{&kv.mem, &kv.main}
+	if err := file.CreateFromSorted(m); err != nil {
+		return err
+	}
+
+	// Replace the original SSTable (atomic operation)
+	if err := renameSync(file.FileName, kv.main.FileName); err != nil {
+		_ = file.Close()
+		return err
+	}
+	file.FileName = kv.main.FileName
+	_ = kv.main.Close()
+	kv.main = file
+
+	// Drop the MemTable and the log
+	kv.mem.Clear()
+	return kv.log.Truncate()
 }

@@ -14,9 +14,11 @@ func TestSortedFile(t *testing.T) {
 
 	keys := [][]byte{[]byte("x"), []byte("y")}
 	vals := [][]byte{[]byte("1"), []byte("234")}
-	err := sf.CreateFromSorted(&SortedArray{keys, vals})
+	deleted := []bool{false, false}
+	err := sf.CreateFromSorted(&SortedArray{keys, vals, deleted})
 	require.Nil(t, err)
 	defer sf.Close()
+	assert.Equal(t, 2, sf.EstimatedSize())
 
 	expected := []byte{
 		2, 0, 0, 0, 0, 0, 0, 0,
