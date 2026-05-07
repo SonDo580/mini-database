@@ -12,6 +12,10 @@ import (
 
 type KVOptions struct {
 	Dirpath string // directory to store logs, metadata, SSTables
+
+	// LSM-tree config
+	LogThreshold int     // max key count in log (convert to SSTable when reached)
+	GrowthFactor float32 // size (key count) ratio between 2 adjacent levels
 }
 
 type KV struct {
@@ -290,14 +294,36 @@ func (kv *KV) Range(start, stop []byte, desc bool) (*RangedKVIter, error) {
 }
 
 func (kv *KV) Compact() error {
-	// Turn log (mirror by MemTable) into the top-level SSTable
-	// TODO: merging between SSTables
+	if kv.mem.Size() >= kv.Options.LogThreshold {
+		if err := kv.compactLog(); err != nil {
+			return err
+		}
+	}
 
+	for i := 0; i < len(kv.main)-1; i++ {
+		if kv.shouldMerge(i) {
+			if err := kv.compactSSTables(i); err != nil {
+				return err
+			}
+			i--
+		}
+	}
+	return nil
+}
+
+// Turn log (mirror by MemTable) into the top-level SSTable
+func (kv *KV) compactLog() error {
 	kv.version++
 	sstable := fmt.Sprintf("sstable_%d", kv.version)
 	filename := path.Join(kv.Options.Dirpath, sstable)
 	file := SortedFile{FileName: filename}
-	m := MergedSortedKV{&kv.mem}
+
+	m := SortedKV(MergedSortedKV{&kv.mem})
+	if len(kv.main) == 0 {
+		// last level (after compact) must drop deleted keys
+		m = NoDeletedSortedKV{m}
+	}
+
 	if err := file.CreateFromSorted(m); err != nil {
 		_ = os.Remove(filename)
 		return err
@@ -317,4 +343,59 @@ func (kv *KV) Compact() error {
 	kv.main = slices.Insert(kv.main, 0, file)
 	kv.mem.Clear()
 	return kv.log.Truncate()
+}
+
+// decide whether to merge level idx with idx+1
+func (kv *KV) shouldMerge(idx int) bool {
+	check(idx+1 < len(kv.main))
+	currSize, nextSize := kv.main[idx].EstimatedSize(), kv.main[idx+1].EstimatedSize()
+	return float32(currSize)*kv.Options.GrowthFactor >= float32(nextSize+currSize)
+}
+
+// merge 2 adjacent SSTables (level and level+1) and replace the originals
+func (kv *KV) compactSSTables(level int) error {
+	kv.version++
+	sstable := fmt.Sprintf("sstable_%d", kv.version)
+	filename := path.Join(kv.Options.Dirpath, sstable)
+	file := SortedFile{FileName: filename}
+
+	m := SortedKV(MergedSortedKV([]SortedKV{&kv.main[level], &kv.main[level+1]}))
+	if level == len(kv.main)-2 {
+		// last level (after merge) must drop deleted keys
+		m = NoDeletedSortedKV{m}
+	}
+
+	if err := file.CreateFromSorted(m); err != nil {
+		_ = os.Remove(filename)
+		return err
+	}
+
+	// record new file name
+	metadata := kv.meta.Get()
+	metadata.Version = kv.version
+	metadata.SSTables = slices.Replace(metadata.SSTables, level, level+2, sstable)
+	if err := kv.meta.Set(metadata); err != nil {
+		_ = file.Close()
+		return err
+	}
+
+	old1, old2 := kv.main[level].FileName, kv.main[level+1].FileName
+	kv.main = slices.Replace(kv.main, level, level+2, file)
+
+	// delete old files
+	_ = os.Remove(old1)
+	_ = os.Remove(old2)
+
+	return nil
+}
+
+type NoDeletedSortedKV struct {
+	SortedKV
+}
+
+func (kv NoDeletedSortedKV) Iter() (iter SortedKVIter, err error) {
+	if iter, err = kv.SortedKV.Iter(); err != nil {
+		return nil, err
+	}
+	return NoDeletedIter{iter}, nil
 }
