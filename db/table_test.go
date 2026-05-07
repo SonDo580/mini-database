@@ -11,10 +11,10 @@ import (
 
 func TestTableByPKey(t *testing.T) {
 	db := DB{}
-	db.KV.log.FileName = ".test_db"
-	defer os.Remove(db.KV.log.FileName)
+	db.KV.Options.Dirpath = "test_db"
+	defer os.RemoveAll(db.KV.Options.Dirpath)
 
-	os.Remove(db.KV.log.FileName)
+	os.RemoveAll(db.KV.Options.Dirpath)
 	err := db.Open()
 	assert.Nil(t, err)
 	defer db.Close()
@@ -74,10 +74,10 @@ func parseStmt(t *testing.T, s string) any {
 
 func TestSQLByPKey(t *testing.T) {
 	db := DB{}
-	db.KV.log.FileName = ".test_db"
-	defer os.Remove(db.KV.log.FileName)
+	db.KV.Options.Dirpath = "test_db"
+	defer os.RemoveAll(db.KV.Options.Dirpath)
 
-	os.Remove(db.KV.log.FileName)
+	os.RemoveAll(db.KV.Options.Dirpath)
 	err := db.Open()
 	assert.Nil(t, err)
 	defer db.Close()
@@ -217,7 +217,7 @@ func TestSQLByPKey(t *testing.T) {
 	err = db.Close()
 	require.Nil(t, err)
 	db = DB{}
-	db.KV.log.FileName = ".test_db"
+	db.KV.Options.Dirpath = "test_db"
 	err = db.Open()
 	require.Nil(t, err)
 
@@ -250,10 +250,10 @@ func TestSQLByPKey(t *testing.T) {
 
 func TestIterByPKey(t *testing.T) {
 	db := DB{}
-	db.KV.log.FileName = ".test_db"
-	defer os.Remove(db.KV.log.FileName)
+	db.KV.Options.Dirpath = "test_db"
+	defer os.RemoveAll(db.KV.Options.Dirpath)
 
-	os.Remove(db.KV.log.FileName)
+	os.RemoveAll(db.KV.Options.Dirpath)
 	err := db.Open()
 	assert.Nil(t, err)
 	defer db.Close()
@@ -391,10 +391,10 @@ func TestIterByPKey(t *testing.T) {
 
 func TestTableExpr(t *testing.T) {
 	db := DB{}
-	db.KV.log.FileName = ".test_db"
-	defer os.Remove(db.KV.log.FileName)
+	db.KV.Options.Dirpath = "test_db"
+	defer os.RemoveAll(db.KV.Options.Dirpath)
 
-	os.Remove(db.KV.log.FileName)
+	os.RemoveAll(db.KV.Options.Dirpath)
 	err := db.Open()
 	assert.Nil(t, err)
 	defer db.Close()

@@ -3,6 +3,7 @@ package db
 import (
 	"bytes"
 	"encoding/binary"
+	"fmt"
 	"hash/crc32"
 	"os"
 	"testing"
@@ -13,13 +14,10 @@ import (
 
 func TestKVBasic(t *testing.T) {
 	kv := KV{}
-	kv.log.FileName = ".test_db_log"
-	kv.main.FileName = ".test_db_main"
-	defer os.Remove(kv.log.FileName)
-	defer os.Remove(kv.main.FileName)
+	kv.Options.Dirpath = "test_db"
+	defer os.RemoveAll(kv.Options.Dirpath)
 
-	os.Remove(kv.log.FileName)
-	os.Remove(kv.main.FileName)
+	os.RemoveAll(kv.Options.Dirpath)
 	err := kv.Open()
 	assert.Nil(t, err)
 	defer kv.Close()
@@ -93,12 +91,58 @@ func TestKVBasic(t *testing.T) {
 	assert.True(t, !ok && err == nil)
 }
 
+func TestKVReopen(t *testing.T) {
+	path := "test_db"
+	defer os.RemoveAll(path)
+
+	for mode := 0; mode < 3; mode++ {
+		// mode = 0: compact
+		// mode = 1: compact & reopen
+		// mode = 2: reopen
+
+		os.RemoveAll(path)
+		kv := KV{Options: KVOptions{Dirpath: path}}
+		err := kv.Open()
+		require.Nil(t, err)
+
+		for i := 0; i < 10; i++ {
+			key := []byte(fmt.Sprintf("data%d", i))
+			val := key
+			updated, err := kv.Set(key, val)
+			require.Nil(t, err)
+			require.True(t, updated)
+
+			if mode == 0 || mode == 1 {
+				err = kv.Compact()
+				require.Nil(t, err)
+			}
+			if mode == 1 || mode == 2 {
+				err = kv.Close()
+				require.Nil(t, err)
+				err = kv.Open()
+				require.Nil(t, err)
+			}
+
+			for j := 0; j < i; j++ {
+				key := []byte(fmt.Sprintf("data%d", j))
+				expected_val := key
+				val, ok, err := kv.Get(key)
+				assert.True(t, err == nil && ok && string(val) == string(expected_val))
+			}
+		}
+
+		err = kv.Close()
+		require.Nil(t, err)
+	}
+
+}
+
 func TestKVUpdateMode(t *testing.T) {
 	kv := KV{}
-	kv.log.FileName = ".test_db"
-	defer os.Remove(kv.log.FileName)
+	kv.Options.Dirpath = "test_db"
+	defer os.RemoveAll(kv.Options.Dirpath)
 
-	os.Remove(kv.log.FileName)
+	os.RemoveAll(kv.Options.Dirpath)
 	err := kv.Open()
 	assert.Nil(t, err)
 	defer kv.Close()
@@ -124,11 +168,11 @@ func TestKVUpdateMode(t *testing.T) {
 
 func TestKVRecovery(t *testing.T) {
 	kv := KV{}
-	kv.log.FileName = ".test_db"
-	defer os.Remove(kv.log.FileName)
+	kv.Options.Dirpath = "test_db"
+	defer os.RemoveAll(kv.Options.Dirpath)
 
 	prepare := func() {
-		os.Remove(kv.log.FileName)
+		os.RemoveAll(kv.Options.Dirpath)
 
 		err := kv.Open()
 		assert.Nil(t, err)
@@ -200,13 +244,10 @@ func TestEntryEncodeDecode(t *testing.T) {
 
 func TestKVSeek(t *testing.T) {
 	kv := KV{}
-	kv.log.FileName = ".test_db_log"
-	kv.main.FileName = ".test_db_main"
-	defer os.Remove(kv.log.FileName)
-	defer os.Remove(kv.main.FileName)
+	kv.Options.Dirpath = "test_db"
+	defer os.RemoveAll(kv.Options.Dirpath)
 
-	os.Remove(kv.log.FileName)
-	os.Remove(kv.main.FileName)
+	os.RemoveAll(kv.Options.Dirpath)
 	err := kv.Open()
 	assert.Nil(t, err)
 	defer kv.Close()
