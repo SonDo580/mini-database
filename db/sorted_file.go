@@ -75,8 +75,8 @@ SSTable format:
   But this gap doesn't waste disk space due to 'sparse file' feature.
 
 KV format:
-[ key length | val length | key data | val data ]
-  4 bytes      4 bytes
+[ key length | val length | deleted | key data | val data ]
+  4 bytes      4 bytes		1 byte
 */
 
 /* Create SSTable by flushing the in-memory data structure (MemTable). */
@@ -134,12 +134,8 @@ func (file *SortedFile) writeSortedFile(kv SortedKV) (err error) {
 	offset := offsetRegionSize // offset of current KV
 
 	for ; iter.Valid(); iter.Next() {
-		// Skip deleted entries
-		if iter.Deleted() {
-			continue
-		}
-
 		k, v := iter.Key(), iter.Val()
+
 		// Write current KV
 		_, err = kvRegionWriter.Write(
 			binary.LittleEndian.AppendUint32(nil, uint32(len(k))),
@@ -153,6 +149,13 @@ func (file *SortedFile) writeSortedFile(kv SortedKV) (err error) {
 		if err != nil {
 			return err
 		}
+
+		if iter.Deleted() {
+			kvRegionWriter.Write([]byte{1})
+		} else {
+			kvRegionWriter.Write([]byte{0})
+		}
+
 		_, err = kvRegionWriter.Write(k)
 		if err != nil {
 			return err
@@ -171,7 +174,7 @@ func (file *SortedFile) writeSortedFile(kv SortedKV) (err error) {
 		}
 
 		nkeys++
-		offset += 4 + 4 + len(k) + len(v) // offset for next KV
+		offset += 4 + 4 + 1 + len(k) + len(v) // offset for next KV
 	}
 
 	check(nkeys <= kv.EstimatedSize())
@@ -224,7 +227,7 @@ func (file *SortedFile) binarySearch(
 ) (pos int, err error) {
 	for left <= right {
 		mid := (left + right) / 2 // floor division
-		k, _, err := file.index(mid)
+		k, _, _, err := file.index(mid)
 		if err != nil {
 			return -1, err
 		}
@@ -243,10 +246,11 @@ func (file *SortedFile) binarySearch(
 }
 
 type SortedFileIter struct {
-	file *SortedFile
-	pos  int
-	key  []byte
-	val  []byte
+	file    *SortedFile
+	pos     int
+	key     []byte
+	val     []byte
+	deleted bool
 }
 
 func (iter *SortedFileIter) Valid() bool {
@@ -262,7 +266,7 @@ func (iter *SortedFileIter) Val() []byte {
 }
 
 func (iter *SortedFileIter) Deleted() bool {
-	return false
+	return iter.deleted
 }
 
 func (iter *SortedFileIter) Next() error {
@@ -281,34 +285,38 @@ func (iter *SortedFileIter) Prev() error {
 
 func (iter *SortedFileIter) loadCurrent() (err error) {
 	if iter.Valid() {
-		iter.key, iter.val, err = iter.file.index(iter.pos)
+		iter.key, iter.val, iter.deleted, err = iter.file.index(iter.pos)
 	}
 	return err
 }
 
 /* Read the pos-th KV pair. */
-func (file *SortedFile) index(pos int) (key []byte, val []byte, err error) {
+func (file *SortedFile) index(pos int) (key []byte, val []byte, deleted bool, err error) {
+	check(0 <= pos && pos < file.nkeys)
+
 	// Read KV offset
-	var buf [8]byte
+	var buf [4 + 4 + 1]byte
 	if _, err = file.fp.ReadAt(buf[:], int64(8+8*pos)); err != nil {
-		return nil, nil, err
+		return nil, nil, false, err
 	}
-	offset := int64(binary.LittleEndian.Uint64(buf[:]))
+	offset := int64(binary.LittleEndian.Uint64(buf[:8]))
 	if offset < int64(8+8*file.nkeys) {
-		return nil, nil, errors.New("corrupted file")
+		return nil, nil, false, errors.New("corrupted file")
 	}
 
 	// Read KV metadata
 	if _, err = file.fp.ReadAt(buf[:], offset); err != nil {
-		return nil, nil, err
+		return nil, nil, false, err
 	}
 	k_len := int(binary.LittleEndian.Uint32(buf[:4]))
 	v_len := int(binary.LittleEndian.Uint32(buf[4:]))
+	deleted = buf[8] != 0
 
 	// Read KV data
 	data := make([]byte, k_len+v_len)
-	if _, err = file.fp.ReadAt(data, offset+4+4); err != nil {
-		return nil, nil, err
+	if _, err = file.fp.ReadAt(data, offset+4+4+1); err != nil {
+		return nil, nil, false, err
 	}
-	return data[:k_len], data[k_len:], nil
+
+	return data[:k_len], data[k_len:], deleted, nil
 }

@@ -24,7 +24,7 @@ type KV struct {
 	// data
 	log  Log
 	mem  SortedArray
-	main SortedFile
+	main []SortedFile
 
 	MultiClosers
 }
@@ -104,12 +104,15 @@ func (kv *KV) openLog() error {
 func (kv *KV) openSSTable() error {
 	meta := kv.meta.Get()
 	kv.version = meta.Version
-	if meta.SSTable != "" {
-		kv.main.FileName = path.Join(kv.Options.Dirpath, meta.SSTable)
-		if err := kv.main.Open(); err != nil {
+	kv.main = kv.main[:0] // clear
+	for _, sstable := range meta.SSTables {
+		filename := path.Join(kv.Options.Dirpath, sstable)
+		file := SortedFile{FileName: filename}
+		if err := file.Open(); err != nil {
 			return err
 		}
-		kv.MultiClosers = append(kv.MultiClosers, &kv.main)
+		kv.MultiClosers = append(kv.MultiClosers, &file)
+		kv.main = append(kv.main, file)
 	}
 	return nil
 }
@@ -176,7 +179,11 @@ func (kv *KV) Del(key []byte) (deleted bool, err error) {
 }
 
 func (kv *KV) Seek(key []byte) (SortedKVIter, error) {
-	m := MergedSortedKV{&kv.mem, &kv.main}
+	m := MergedSortedKV{&kv.mem}
+	for i := range kv.main {
+		m = append(m, &kv.main[i])
+	}
+
 	iter, err := m.Seek(key)
 	if err != nil {
 		return nil, err
@@ -282,21 +289,24 @@ func (kv *KV) Range(start, stop []byte, desc bool) (*RangedKVIter, error) {
 	return rangedKVIter, nil
 }
 
-/* Merge MemTable (mirroring the log) and SSTable to produce a new SSTable. */
 func (kv *KV) Compact() error {
-	// Merge MemTable and SSTable to new SSTable
+	// Turn log (mirror by MemTable) into the top-level SSTable
+	// TODO: merging between SSTables
+
 	kv.version++
 	sstable := fmt.Sprintf("sstable_%d", kv.version)
 	filename := path.Join(kv.Options.Dirpath, sstable)
 	file := SortedFile{FileName: filename}
-	m := MergedSortedKV{&kv.mem, &kv.main}
+	m := MergedSortedKV{&kv.mem}
 	if err := file.CreateFromSorted(m); err != nil {
 		_ = os.Remove(filename)
 		return err
 	}
 
 	// record new SSTable name
-	metadata := KVMetaData{Version: kv.version, SSTable: sstable}
+	metadata := kv.meta.Get()
+	metadata.Version = kv.version
+	metadata.SSTables = slices.Insert(metadata.SSTables, 0, sstable)
 	if err := kv.meta.Set(metadata); err != nil {
 		// don't remove new SSTable since metadata may have been persisted
 		// if we remove it, the next open will try to read a non-existing file
@@ -304,13 +314,7 @@ func (kv *KV) Compact() error {
 		return err
 	}
 
-	// delete old SSTable
-	_ = kv.main.Close()
-	_ = os.Remove(kv.main.FileName)
-
-	kv.main = file // swap to new SSTable
-
-	// clear MemTable and Log (data merged to new SSTable)
+	kv.main = slices.Insert(kv.main, 0, file)
 	kv.mem.Clear()
 	return kv.log.Truncate()
 }

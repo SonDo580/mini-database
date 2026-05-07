@@ -37,8 +37,8 @@ type KVMetaItem struct {
 }
 
 type KVMetaData struct {
-	Version uint64
-	SSTable string // only 1 SSTable for now
+	Version  uint64
+	SSTables []string
 }
 
 func (meta *KVMetaStore) Open() error {
